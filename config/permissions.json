@@ -1,0 +1,44 @@
+{
+  "debugLog": false,
+  "permissionReviewLog": false,
+  "yoloMode": false,
+  "authorizerChain": ["pi-auto-review"],
+  "piInfrastructureReadPaths": ["~/.bun/install/cache/*", "~/.gradle/caches/*", "~/.agents/skills/*"],
+  "permission": {
+    "*": "ask",
+    "read": "allow",
+    "grep": "allow",
+    "find": "allow",
+    "ls": "allow",
+    "write": "allow",
+    "edit": "allow",
+    "web_search": "allow",
+    "skill": "allow",
+    "powershell": "ask",
+    "external_directory": {"*": "ask"},
+    "path": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow",
+      "*.pem": "deny",
+      "*.key": "deny",
+      "~/.ssh/*": "deny",
+      "~/.aws/*": "deny",
+      "~/.claude/.credentials.json": "deny",
+      "~/.pi/agent/auth.json": "deny",
+      "~/.codex/auth.json": "deny"
+    },
+    "bash": {
+      "*": "ask",
+      "pwd": "allow",
+      "ls *": "allow",
+      "rg *": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git rev-parse*": "allow"
+    }
+  }
+}

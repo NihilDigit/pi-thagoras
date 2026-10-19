@@ -1,0 +1,8 @@
+# Fill into a user-managed file OUTSIDE the repository after resource approval.
+# This contains placeholders, never tunnel credentials or a token.
+tunnel: REPLACE_WITH_APPROVED_TUNNEL_UUID
+credentials-file: 'C:/Users/REPLACE_USER/.cloudflared/REPLACE_WITH_APPROVED_TUNNEL_UUID.json'
+ingress:
+  - hostname: pi-relay.nihildigit.dev
+    service: http://127.0.0.1:3000
+  - service: http_status:404

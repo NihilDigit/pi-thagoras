@@ -1,0 +1,24 @@
+{
+  "name": "pi-thagoras",
+  "private": true,
+  "version": "0.1.0",
+  "engines": { "node": ">=24.19.0 <25" },
+  "scripts": {
+    "build:windows": "node scripts/build-windows.mjs",
+    "test:setup": "node --test tests/portable-profile.test.mjs",
+    "smoke:windows": "node scripts/portable-smoke.mjs",
+    "doctor": "node scripts/doctor.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/compact-warning.ts",
+      "./extensions/remote-interactive.ts",
+      "./extensions/subagent-inspector.ts"
+    ],
+    "subagents": {
+      "agents": [
+        "./agents"
+      ]
+    }
+  }
+}

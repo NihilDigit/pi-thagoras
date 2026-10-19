@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Markwon uses Glide's view targets. Its unused NotificationTarget is
+         dependency code and pitato does not post notifications. -->
+    <issue id="NotificationPermission">
+        <ignore regexp="com\.bumptech\.glide\.request\.target\.NotificationTarget" />
+    </issue>
+</lint>

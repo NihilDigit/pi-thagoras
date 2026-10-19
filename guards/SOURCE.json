@@ -1,0 +1,21 @@
+{
+  "source": "vendored personal CodexSetup recovery core; all runtime files are included in this repository",
+  "observed": "2026-10-18",
+  "sourceVersion": "unversioned local code; hashes identify exact input",
+  "files": {
+    "common.py": "d05c7da420175fa1f72191b8158e9720652acb61de5342949a449780a9ff27b4",
+    "storage.py": "c92caf5d101ceb416623f809e730f344c20b1f93f63ea3dfd2bf743f3899e06e",
+    "recycle_delete.py": "3c58c0dde982a60dc533d92a847a8b203e4f5c7d62aa0a3a1530cc0b6ebadcac",
+    "git_backup.py": "7fd92d9d55503406c1150fbbf1b3ffd2488fecf0a07ceb7a612d2f243f759380",
+    "lib/shellcmds.py": "7476474096bdd7abae1d91a43d1ab9b4219d76b2c88ab9d53f49b11a3dcd56f1",
+    "lib/pwshcmds.py": "1fbb055c44e1f2e0f0e66304aa304896c6294f92066b327189df2860c4a209c1"
+  },
+  "adaptations": [
+    "independent pi-thagoras owner/state/refs namespace",
+    "actual shell selected by tool name, not host OS",
+    "no implicit cleanup",
+    "dedicated state owner marker and legacy-state rejection",
+    "Pi tool event bridge fails closed",
+    "input rewrite is not approval; reviewer ordering requires integration verification"
+  ]
+}

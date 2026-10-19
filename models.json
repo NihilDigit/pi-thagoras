@@ -1,0 +1,28 @@
+{
+  "providers": {
+    "openai": {
+      "models": [
+        {
+          "id": "codex-auto-review",
+          "name": "Codex Auto Review",
+          "api": "openai-responses",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 272000,
+          "maxTokens": 4096
+        }
+      ],
+      "modelOverrides": {
+        "gpt-6-astra": {
+          "contextWindow": 512000
+        },
+        "gpt-6.1-sol": {
+          "contextWindow": 1000000
+        },
+        "gpt-6-luna": {
+          "contextWindow": 1000000
+        }
+      }
+    }
+  }
+}

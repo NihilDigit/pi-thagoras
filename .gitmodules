@@ -1,0 +1,12 @@
+[submodule "upstream/remote_pi"]
+	path = upstream/remote_pi
+	url = https://github.com/NihilDigit/remote_pi.git
+[submodule "upstream/pi-packages"]
+	path = upstream/pi-packages
+	url = https://github.com/NihilDigit/pi-packages.git
+[submodule "upstream/pi-permission-packages"]
+	path = upstream/pi-permission-packages
+	url = https://github.com/NihilDigit/pi-permission-packages.git
+[submodule "upstream/pi-subagents"]
+	path = upstream/pi-subagents
+	url = https://github.com/NihilDigit/pi-subagents.git

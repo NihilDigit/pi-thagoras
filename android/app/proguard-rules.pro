@@ -1,0 +1,2 @@
+-keep class org.bouncycastle.crypto.params.Ed25519* { *; }
+-keep class org.bouncycastle.crypto.signers.Ed25519Signer { *; }

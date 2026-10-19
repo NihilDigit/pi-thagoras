@@ -1,0 +1,21 @@
+{
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-6-astra",
+  "defaultThinkingLevel": "medium",
+  "modelThinkingLevels": {
+    "openai/gpt-6-astra": "medium",
+    "openai/gpt-6.1-sol": "high",
+    "openai/gpt-6-luna": "medium"
+  },
+  "subagents": {
+    "disableBuiltins": true
+  },
+  "defaultTools": [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "-web_search",
+    "-url_context"
+  ]
+}

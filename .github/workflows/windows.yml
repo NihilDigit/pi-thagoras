@@ -1,0 +1,59 @@
+name: Windows setup
+on:
+  push:
+    paths: ['setup.ps1', 'setup/**', 'scripts/**', 'agents/**', 'extensions/**', 'guards/**', 'config/**', 'models.json', 'settings.json', 'package.json', 'remote/**', 'tests/**', 'upstream/**', '.gitmodules', '.github/workflows/windows.yml']
+  pull_request:
+    paths: ['setup.ps1', 'setup/**', 'scripts/**', 'agents/**', 'extensions/**', 'guards/**', 'config/**', 'models.json', 'settings.json', 'package.json', 'remote/**', 'tests/**', 'upstream/**', '.gitmodules', '.github/workflows/windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fresh-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: setup/runtime/package-lock.json
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Configure Rust toolchain
+        run: |
+          $version = (Get-Content remote/versions.json -Raw | ConvertFrom-Json).relay.testedRustVersion
+          rustup toolchain install $version --profile minimal
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          rustup default $version
+      - name: Check configuration generation
+        run: node --test tests/portable-profile.test.mjs
+      - name: Build locked Windows runtime and relay tools
+        run: node scripts/build-windows.mjs --relay-server
+      - name: Verify protected installation on Windows
+        run: |
+          $build = Get-Content .build/windows-current.json -Raw | ConvertFrom-Json
+          $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          & ./scripts/install-windows.ps1 -BundleRoot $build.stage -ExpectedManifestHash $build.manifestHash -UserSid $sid
+          $release = Join-Path $env:ProgramData ('PiThagoras/' + $sid + '/releases/' + $build.manifestHash.Substring(0,16))
+          if (-not (Test-Path (Join-Path $release 'manifest.json'))) { throw 'Protected install did not complete' }
+          $acl = Get-Acl $release
+          if (-not $acl.AreAccessRulesProtected) { throw 'Installed code inherits an unreviewed ACL' }
+          $own = @($acl.GetAccessRules($true,$false,[Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -eq $sid })
+          if ($own.Count -ne 1 -or ($own[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write)) { throw 'Current user can modify installed code' }
+          node scripts/portable-smoke.mjs $release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./scripts/service-smoke.ps1 -ReleaseRoot $release
+      - name: Check current checkout has no runtime state
+        run: |
+          git diff --exit-code
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $unexpected = git ls-files --others --exclude-standard
+          if ($unexpected) { throw ('Unexpected generated files: ' + ($unexpected -join ', ')) }
