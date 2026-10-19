@@ -10,7 +10,7 @@ if (-not $Run) {
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 . (Join-Path $PSScriptRoot 'runtime-config.ps1')
 $runtime = (Get-PitatoRuntimeConfig).runtimeRoot
-$pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+$pwsh = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $service = New-Object -ComObject 'Schedule.Service'
 $service.Connect()
 $folder = $service.GetFolder('\')
@@ -45,7 +45,7 @@ foreach ($entry in $entries) {
     $task.Settings.RestartInterval = 'PT1M'
     $task.Settings.ExecutionTimeLimit = 'PT0S'
     $action = $task.Actions.Create(0)
-    $action.Path = if ($entry.DirectNode) { (Get-Command node -CommandType Application -ErrorAction Stop).Source } else { $pwsh }
+    $action.Path = if ($entry.DirectNode) { (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source } else { $pwsh }
     $diagnosticDirectory = Join-Path ([IO.Path]::GetTempPath()) 'pi-thagoras-startup'
     [IO.Directory]::CreateDirectory($diagnosticDirectory) | Out-Null
     $diagnosticFile = Join-Path $diagnosticDirectory ($entry.Name + '.error.txt')

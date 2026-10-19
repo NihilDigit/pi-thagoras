@@ -23,6 +23,13 @@ $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0)
 $listener.Start(); $port=$listener.LocalEndpoint.Port; $listener.Stop()
 $previousAgent = $env:PI_CODING_AGENT_DIR
 $previousPort = $env:PITATO_SMOKE_PORT
+$previousPath = $env:Path
+$expectedNode = (Get-Command node -CommandType Application | Select-Object -First 1).Source
+$expectedPwsh = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
+$fallbackTools = Join-Path $fixture 'fallback-tools'
+[IO.Directory]::CreateDirectory($fallbackTools) | Out-Null
+foreach($name in @('node.exe','pwsh.exe')) { [IO.File]::WriteAllText((Join-Path $fallbackTools $name),'synthetic fallback; never execute') }
+$env:Path += ';' + $fallbackTools
 $env:PI_CODING_AGENT_DIR = Join-Path $fixture 'agent'
 $env:PITATO_SMOKE_PORT = "$port"
 $prefix = 'PiThagorasSmoke-' + [guid]::NewGuid().ToString('N')
@@ -31,11 +38,15 @@ $registered = $false
 try {
     & node $prepare $root ([IO.Path]::GetFullPath($ReleaseRoot)) $fixture
     if($LASTEXITCODE){throw 'Synthetic service profile failed'}
+    if(@(Get-Command node -CommandType Application).Count -lt 2 -or @(Get-Command pwsh -CommandType Application).Count -lt 2){throw 'Duplicate executable fixture did not activate'}
+    . (Join-Path $root 'remote/host-runtime.ps1')
+    if((Get-PitatoManagedPi).Node -ne $expectedNode){throw 'Managed Pi resolved multiple Node executables'}
     & (Join-Path $root 'remote/enable-login-start.ps1') -Components Host -TaskPrefix $prefix -Run -Enable
     $registered=$true
     & (Join-Path $root 'remote/enable-login-start.ps1') -Components Relay,Tunnel -TaskPrefix $prefix -Run
     foreach($component in @('Relay','Tunnel')){
         $serverTask=Get-ScheduledTask -TaskName ($prefix+'-'+$component)
+        if($serverTask.Actions.Execute -ne $expectedPwsh){throw 'Task did not select the first PowerShell executable'}
         if($serverTask.Settings.Enabled){throw 'Synthetic server tasks must stay disabled'}
         $encoded=($serverTask.Actions.Arguments -split ' ')[-1]
         $command=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
@@ -47,7 +58,7 @@ try {
         Export-ScheduledTask -TaskName ($prefix+'-'+$component) | Set-Content -LiteralPath (Join-Path $fixture ($component+'.xml')) -Encoding utf8
     }
     $task=Get-ScheduledTask -TaskName $taskName
-    if($task.Principal.RunLevel.ToString() -ne 'Limited' -or $task.Principal.LogonType.ToString() -ne 'Interactive' -or $task.Actions.Execute -notmatch 'node\.exe$'){throw 'Unexpected task principal or action'}
+    if($task.Principal.RunLevel.ToString() -ne 'Limited' -or $task.Principal.LogonType.ToString() -ne 'Interactive' -or $task.Actions.Execute -ne $expectedNode){throw 'Unexpected task principal or action'}
     Export-ScheduledTask -TaskName $taskName | Set-Content -LiteralPath (Join-Path $fixture 'task.xml') -Encoding utf8
     $live = [Diagnostics.Process]::GetCurrentProcess().SessionId -ne 0
     if($live){
@@ -59,11 +70,12 @@ try {
         }
         if(-not $ready){throw 'Scheduled synthetic Host did not become ready. Inspect the retained fixture logs.'}
     }
-    $result=@{ taskDefinition=$true; serverDefinitions=$true; quotedPaths=$true; leastPrivilege=$true; directNode=$true; liveHost=$live; modelCalls=0; productionTasksChanged=$false }
+    $result=@{ taskDefinition=$true; serverDefinitions=$true; quotedPaths=$true; multipleExecutables=$true; leastPrivilege=$true; directNode=$true; liveHost=$live; modelCalls=0; productionTasksChanged=$false }
     if(-not $live){$result.headlessReason='Session 0 has no interactive logon token; definition verified without starting the task.'}
     $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root '.build/service-smoke.json') -Encoding utf8
     $result | ConvertTo-Json
 } finally {
     if($registered){foreach($component in @('Host','Relay','Tunnel')){ $name=$prefix+'-'+$component; if(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue){Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName $name -Confirm:$false} }}
     $env:PI_CODING_AGENT_DIR=$previousAgent; $env:PITATO_SMOKE_PORT=$previousPort
+    $env:Path=$previousPath
 }

@@ -16,8 +16,8 @@ $root = $PSScriptRoot
 $AgentRoot = [IO.Path]::GetFullPath($AgentRoot)
 if (-not $RuntimeRoot) { $RuntimeRoot = Join-Path $AgentRoot 'pi-thagoras-state' }
 $RuntimeRoot = [IO.Path]::GetFullPath($RuntimeRoot)
-$node = (Get-Command node -CommandType Application -ErrorAction Stop).Source
-$python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+$node = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 & $python -c 'import sys; assert sys.version_info >= (3,11), "Python 3.11+ is required"'
 if ($LASTEXITCODE) { throw 'Recovery guard requires Python 3.11+.' }
 $project = (Resolve-Path -LiteralPath $ProjectPath).Path
@@ -50,7 +50,7 @@ if ($hostTask -and $hostTask.Description -ne 'Managed by pi-thagoras; current-us
 $active = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'pi-launcher\.js|pi-coding-agent[\\/].*cli\.js|subagent-runner-bootstrap' })
 if ($active.Count) { throw 'Close Pi and its child tasks before applying setup.' }
 $script = Join-Path $root 'scripts/install-windows.ps1'
-$installer = Start-Process -FilePath (Get-Command pwsh).Source -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-File',('"'+$script+'"'),'-BundleRoot',('"'+$pointer.stage+'"'),'-ExpectedManifestHash',$pointer.manifestHash,'-UserSid',$sid)
+$installer = Start-Process -FilePath (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-File',('"'+$script+'"'),'-BundleRoot',('"'+$pointer.stage+'"'),'-ExpectedManifestHash',$pointer.manifestHash,'-UserSid',$sid)
 if ($installer.ExitCode) { throw 'Protected release installation failed; user profile was not changed.' }
 $active = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'pi-launcher\.js|pi-coding-agent[\\/].*cli\.js|subagent-runner-bootstrap' })
 if ($active.Count) { throw 'Pi started while installation was awaiting confirmation. Close it before applying the user profile.' }

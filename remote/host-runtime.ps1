@@ -6,7 +6,7 @@ function Get-PitatoManagedPi {
         $profile = Get-Content -LiteralPath $profilePath -Raw | ConvertFrom-Json
         $cli = [IO.Path]::GetFullPath($profile.piCli)
         if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) { throw 'Configured Pi executable is missing. Run setup or doctor.' }
-        return [pscustomobject]@{ InstallRoot=$profile.releaseRoot; Cli=$cli; Node=(Get-Command node -CommandType Application -ErrorAction Stop).Source; Version=$profile.piVersion }
+        return [pscustomobject]@{ InstallRoot=$profile.releaseRoot; Cli=$cli; Node=(Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source; Version=$profile.piVersion }
     }
     $managedRoot = Join-Path $AgentRoot 'install'
     $version = ([IO.File]::ReadAllText((Join-Path $managedRoot 'current-version'))).Trim()
@@ -20,7 +20,7 @@ function Get-PitatoManagedPi {
     [pscustomobject]@{
         InstallRoot = $managedRoot
         Cli = $cli
-        Node = (Get-Command node -CommandType Application -ErrorAction Stop).Source
+        Node = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
         Version = $version
     }
 }
