@@ -103,25 +103,20 @@ test("provider switch hides old account data until revalidated; same account pre
 	try { await other.request(); expect(other.state?.delta).toBe(0); } finally { other.dispose(); }
 });
 
-test("model names remain plain text with bounded width under dim ANSI", () => {
-	const view: FooterView = { cwd: "C:/中文/项目", branch: "main", git: "~6 ?30", context: "37%/272k",
-		model: "GPT-5.4", thinking: "high", quota: "wk 32% (+3pp)", reset: "󰥔 2d 6h", tps: 48.6,
-		statuses: new Map([["remote-pi:relay", "🟢 relay"], ["remote-pi:session", "📡 local (1)"]]), kv: "KV 4m 32s",
+test("single-line footer remains bounded under dim ANSI", () => {
+	const view: FooterView = { cwd: "C:/中文/项目", branch: "main", git: "~6 ?30", bar: "", context: "37%/272k",
+		model: "GPT-5.4", thinking: "high", quota: " 32% (+3%)", reset: "󰥔 54h", secondaryQuota: " 11%", tps: 48.6,
+		statuses: new Map([["compact", "compact ready"], ["worktree", "main"]]),
 		dim: text => `\x1b[2m${text}\x1b[22m` };
 	for (const model of ["gpt-5.4", "GPT-5.4", "claude-opus"]) {
 		for (let width = 0; width <= 240; width++) {
 			const lines = renderFooter({ ...view, model }, width);
-			expect(lines).toHaveLength(2);
+			expect(lines).toHaveLength(1);
 			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
-		const first = stripTerminalSequences(renderFooter({ ...view, model }, 180)[0]);
-		expect(first.endsWith(`  ${model} high`)).toBe(true);
-		expect(first).not.toMatch(/[\uec81\uf4bc]/u);
 	}
 	const wide = renderFooter(view, 180);
-	expect(wide[1]).toContain("\x1b[2m relay   local (1)\x1b[22m  KV 4m 32s");
-	expect(wide[1]).not.toContain("\x1b[2mKV");
-	expect(stripTerminalSequences(wide[1]).endsWith(" relay   local (1)  KV 4m 32s")).toBe(true);
+	expect(stripTerminalSequences(wide[0])).toContain(" 32% (+3%) 󰥔 54h │  11% │ 48.6 tok/s │ compact ready  main │ Context  37%/272k");
 });
 
 test("real repository porcelain -z untracked-file count agrees with independent git ls-files", () => {
@@ -162,7 +157,7 @@ test("read-only /pi-footer status is safe and does not trigger auth, HTTP, model
 		expect(providers).toHaveLength(1); expect(gitCalls).toBe(beforeGit);
 		expect(notifications.at(-1)).not.toContain("Model icon");
 		const first = component.render(180)[0];
-		expect(first.endsWith("  gpt-5.4 high")).toBe(true);
+		expect(first).toContain("C:/Codes/example");
 		await commands.get("pi-footer").handler("icon chip", ctx);
 		expect(notifications.at(-1)).toBe("Usage: /pi-footer status");
 		expect(component.render(180)[0]).toBe(first);

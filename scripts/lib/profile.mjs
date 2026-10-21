@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 
 const read = (path, fallback = {}) => existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : fallback;
 const json = (value) => JSON.stringify(value, null, 2) + "\n";
-const names = ["pi-thagoras", "pi-subagents", "@gotgenes/pi-permission-system", "@erichll/pi-auto-review", "@lll9p/pi-better-compaction", "pi-web-search"];
+const names = ["pi-thagoras", "pi-subagents", "@gotgenes/pi-permission-system", "@erichll/pi-auto-review", "@router-for-me/pi-cliproxyapi-provider", "pi-web-search"];
 function packageName(item) {
   const source = typeof item === "string" ? item : item?.source;
   if (typeof source !== "string") return;
@@ -21,14 +21,9 @@ function defaults(existing, base) {
 }
 const within = (parent, path) => { const rel = relative(parent, path); return !rel.startsWith("..") && !isAbsolute(rel); };
 
-export function planProfile({ releaseRoot, sourceRoot = releaseRoot, checkoutRoot, agentDir, runtimeRoot, projectPath, relayUrl, port = 4317, machineName = "pitato" }) {
-  releaseRoot = resolve(releaseRoot); agentDir = resolve(agentDir); runtimeRoot = resolve(runtimeRoot); projectPath = resolve(projectPath);
-  if (!statSync(projectPath).isDirectory()) throw new Error("Select an existing project directory.");
-  if ([agentDir, runtimeRoot].some((path) => within(projectPath, path) || within(releaseRoot, path) || (checkoutRoot && within(resolve(checkoutRoot), path)))) throw new Error("Agent and runtime data must stay outside the project, source checkout and installed code.");
-  const relay = new URL(relayUrl);
-  if (relay.username || relay.password || relay.search || relay.hash ||
-    (relay.protocol !== "wss:" && !(relay.protocol === "ws:" && ["127.0.0.1", "localhost", "[::1]"].includes(relay.hostname)))) throw new Error("Use a wss relay URL without credentials; ws is allowed only for loopback tests.");
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Host port must be between 1024 and 65535.");
+export function planProfile({ releaseRoot, sourceRoot = releaseRoot, checkoutRoot, agentDir, runtimeRoot }) {
+  releaseRoot = resolve(releaseRoot); agentDir = resolve(agentDir); runtimeRoot = resolve(runtimeRoot);
+  if ([agentDir, runtimeRoot].some((path) => within(releaseRoot, path) || (checkoutRoot && within(resolve(checkoutRoot), path)))) throw new Error("Agent and runtime data must stay outside the source checkout and installed code.");
   const previous = read(join(agentDir, "pi-thagoras.json"));
   const guard = join(agentDir, "extensions", "local-guards.ts");
   if (existsSync(guard) && !previous.releaseRoot) throw new Error("An existing local-guards.ts is not owned by this installer. Review and migrate it before applying setup.");
@@ -36,16 +31,17 @@ export function planProfile({ releaseRoot, sourceRoot = releaseRoot, checkoutRoo
   const seed = join(sourceRoot, "app");
   const entry = (name, path = "src/index.ts") => join(modules, name, path);
   const permission = entry("@gotgenes/pi-permission-system"), reviewer = entry("@erichll/pi-auto-review");
-  const compaction = entry("@lll9p/pi-better-compaction", "index.ts");
   const settingsPath = join(agentDir, "settings.json"), existing = read(settingsPath);
   const settings = defaults(existing, read(join(seed, "settings.json")));
   settings.packages = [...(existing.packages ?? []).filter((item) => {
     const source = typeof item === "string" ? item : item?.source;
     return !names.includes(packageName(item)) && !(previous.releaseRoot && typeof source === "string" && isAbsolute(source) && within(previous.releaseRoot, source));
   }),
-    join(modules, "pi-web-search"), join(modules, "@gotgenes/pi-permission-system"), join(modules, "@lll9p/pi-better-compaction"),
-    join(modules, "@erichll/pi-auto-review"), join(modules, "pi-subagents"), app];
-  settings.subagents = { ...settings.subagents, defaultSubagentOnlyExtensions: [guard, permission, reviewer, compaction,
+    join(modules, "pi-web-search"), join(modules, "@gotgenes/pi-permission-system"),
+    join(modules, "@erichll/pi-auto-review"), join(modules, "pi-subagents"),
+    { source: join(modules, "@router-for-me/pi-cliproxyapi-provider"), extensions: ["!extensions/tps.ts"] },
+    app];
+  settings.subagents = { ...settings.subagents, defaultSubagentOnlyExtensions: [guard, permission, reviewer,
     ...(existing.subagents?.defaultSubagentOnlyExtensions ?? []).filter((path) => path !== guard && !(previous.releaseRoot && within(previous.releaseRoot, path)))] };
   const modelPath = join(agentDir, "models.json"), modelDefaults = read(join(seed, "models.json"));
   const models = defaults(read(modelPath), modelDefaults);
@@ -62,15 +58,11 @@ export function planProfile({ releaseRoot, sourceRoot = releaseRoot, checkoutRoo
   policy.permission.path[join(agentDir, "auth.json").replaceAll("\\", "/")] = "deny";
   const reviewPath = join(agentDir, "extensions", "pi-auto-review", "config.json");
   const review = defaults(read(reviewPath), { model: "openai/codex-auto-review" });
-  const piCli = entry("@earendil-works/pi-coding-agent", "dist/bundle/cli.js"), remotePackageRoot = join(modules, "remote-pi");
+  const piCli = entry("@earendil-works/pi-coding-agent", "dist/bundle/cli.js");
   const release = read(join(sourceRoot, "release.json"));
-  const remoteHome = join(runtimeRoot, "home");
   const recoveryState = join(runtimeRoot, "recovery");
-  const info = { format: 1, releaseRoot, agentDir, runtimeRoot, remoteHome, recoveryState, piCli, piVersion: "1.3.0", relayUrl,
-    remotePackageRoot, remoteIntegrity: release.remoteIntegrity, softwareManifest: release.software ? join(releaseRoot, "software.json") : undefined };
-  const hostPath = join(runtimeRoot, "pitato", "host.json");
-  const host = { ...read(hostPath), name: machineName, projects: [{ id: "primary", name: projectPath.split(/[/\\]/).at(-1), cwd: projectPath }],
-    relayUrl, trustProjects: false, port, piBin: piCli, agentDir, releaseRoot, remoteHome, recoveryState, remotePackageRoot };
+  const info = { format: 1, releaseRoot, agentDir, runtimeRoot, recoveryState, piCli, piVersion: "1.3.0",
+    softwareManifest: release.software ? join(releaseRoot, "software.json") : undefined };
   const wrapper = `// Managed by pi-thagoras. Generated for this machine.\nexport default async function(pi) {\nprocess.env.PI_THAGORAS_RECOVERY_STATE ??= ${JSON.stringify(recoveryState)};\nconst { createRecoveryHost } = await import(${JSON.stringify(pathToFileURL(join(app, "guards/live-entry.ts")).href)});\ncreateRecoveryHost(${json({ guard, permissionSystem: permission, reviewer, requiredChildApi: entry("pi-subagents", "src/api/required-child-extensions.js") }).trim()})(pi);\n}\n`;
   const appendPath = join(agentDir, "APPEND_SYSTEM.md"), begin = "<!-- pi-thagoras:start -->", end = "<!-- pi-thagoras:end -->";
   const current = existsSync(appendPath) ? readFileSync(appendPath, "utf8") : "";
@@ -81,7 +73,7 @@ export function planProfile({ releaseRoot, sourceRoot = releaseRoot, checkoutRoo
   const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
   const launcher = `$env:PI_CODING_AGENT_DIR=${quote(agentDir)}\n$env:PI_MANAGED_INSTALL_ROOT=${quote(releaseRoot)}\n$env:PI_THAGORAS_RECOVERY_STATE=${quote(recoveryState)}\n& node ${quote(piCli)} @args\nexit $LASTEXITCODE\n`;
   return { info, files: new Map([[settingsPath, json(settings)], [modelPath, json(models)], [permissionPath, json(policy)], [reviewPath, json(review)], [infoPath, json(info)],
-    [guard, wrapper], [appendPath, append], [hostPath, json(host)], [join(agentDir, "bin", "pi-thagoras.ps1"), launcher],
+    [guard, wrapper], [appendPath, append], [join(agentDir, "bin", "pi-thagoras.ps1"), launcher],
     [join(agentDir, "bin", "pi-thagoras.cmd"), '@echo off\r\npwsh -NoProfile -File "%~dp0pi-thagoras.ps1" %*\r\n']]) };
 }
 

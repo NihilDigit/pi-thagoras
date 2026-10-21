@@ -24,6 +24,7 @@ docmirror4a/
 
 # Temporary source/license reference for the custom footer.
 .pi-footer-reference/
+.playwright-cli/
 
 .pi-thagoras-backups/
 

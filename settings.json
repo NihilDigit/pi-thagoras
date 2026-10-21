@@ -1,11 +1,12 @@
 {
-  "defaultProvider": "openai",
-  "defaultModel": "gpt-6-astra",
+  "defaultProvider": "cliproxyapi",
+  "defaultModel": "gemini-4-argon-high",
   "defaultThinkingLevel": "medium",
   "modelThinkingLevels": {
+    "cliproxyapi/gemini-4-argon-high": "medium",
+    "cliproxyapi/gemini-3.8-flash-high": "medium",
     "openai/gpt-6-astra": "medium",
-    "openai/gpt-6.1-sol": "high",
-    "openai/gpt-6-luna": "medium"
+    "openai/gpt-6.1-sol": "medium"
   },
   "subagents": {
     "disableBuiltins": true

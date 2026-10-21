@@ -12,8 +12,10 @@
   "pi": {
     "extensions": [
       "./extensions/compact-warning.ts",
-      "./extensions/remote-interactive.ts",
-      "./extensions/subagent-inspector.ts"
+      "./extensions/pi-footer.ts"
+    ],
+    "skills": [
+      "./skills"
     ],
     "subagents": {
       "agents": [

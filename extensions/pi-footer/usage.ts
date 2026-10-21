@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { acceptSample, CACHE_MS, parseWeekUsage, type QuotaState, type WeekSample } from "./core.ts";
+import { acceptSample, CACHE_MS, parseWeekUsage, RETRY_BASE_MS, type QuotaState, type WeekSample } from "./core.ts";
+import { isAgyProvider, loadAgyCliUsage, loadCodexCliUsage, quotaPoolKey, type SupportedProvider } from "./cli.ts";
+export { isAgyProvider, loadAgyCliUsage, loadCodexCliUsage, quotaPoolKey, type SupportedProvider };
 
 export const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 export interface ResolvedAuth {
@@ -8,10 +10,10 @@ export interface ResolvedAuth {
 }
 export interface AccountSample { account: string; sample: WeekSample }
 export type UsageCode = "pending" | "ok" | "auth-missing" | "auth-non-oauth" | "auth-error" |
-	"account-missing" | "http" | "network" | "timeout" | "payload-missing-weekly" | "internal";
+	"account-missing" | "cli-missing" | "cli-error" | "http" | "network" | "timeout" | "payload-missing-weekly" | "internal";
 export interface UsageDiagnostic { code: UsageCode; status?: number }
 const SAFE_CODES = new Set<UsageCode>(["pending", "ok", "auth-missing", "auth-non-oauth", "auth-error",
-	"account-missing", "http", "network", "timeout", "payload-missing-weekly", "internal"]);
+	"account-missing", "cli-missing", "cli-error", "http", "network", "timeout", "payload-missing-weekly", "internal"]);
 export class UsageFailure extends Error {
 	constructor(readonly code: UsageCode, readonly status?: number) {
 		super(status === undefined ? code : `${code} ${status}`);
@@ -24,15 +26,23 @@ export function safeDiagnostic(error: unknown, signal?: AbortSignal): UsageDiagn
 			? { status: error.status } : {}) };
 	return { code: "internal" }; // Never retain arbitrary exception messages, causes, or response bodies.
 }
-export function supportedProvider(provider: string | undefined): provider is "openai" | "openai-codex" {
-	return provider === "openai" || provider === "openai-codex";
+export function supportedProvider(provider: string | undefined): provider is SupportedProvider {
+	return provider === "openai" || provider === "openai-codex" || isAgyProvider(provider);
 }
 export async function loadProviderUsage(provider: string | undefined,
 	registry: { getProviderAuth(provider: string): Promise<ResolvedAuth | undefined> }, signal: AbortSignal,
-	fetcher: typeof fetch = fetch, now: () => number = Date.now): Promise<AccountSample> {
+	fetcher?: typeof fetch, now: () => number = Date.now, modelId?: string): Promise<AccountSample> {
 	if (!supportedProvider(provider)) throw new UsageFailure("auth-missing");
-	// Bind to exactly the selected provider. No legacy/account fallback and no API key substitution.
-	return loadUsage(() => registry.getProviderAuth(provider), signal, fetcher, now);
+	if (isAgyProvider(provider)) return loadAgyCliUsage(modelId, signal, now);
+	if (fetcher !== undefined) return loadUsage(() => registry.getProviderAuth(provider), signal, fetcher, now);
+	try {
+		return await loadUsage(() => registry.getProviderAuth(provider), signal, fetch, now);
+	} catch (err) {
+		if (err instanceof UsageFailure && (err.code === "account-missing" || err.code === "http")) {
+			return loadCodexCliUsage(signal, now);
+		}
+		throw err;
+	}
 }
 
 /** Cancellation of our wait does not cancel Pi's locked OAuth refresh/persistence. */
@@ -122,7 +132,7 @@ export class UsagePoller {
 	private async refresh() {
 		const controller = new AbortController();
 		this.controller = controller;
-		const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 8_000);
+		const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 15_000);
 		timer.unref?.();
 		try {
 			const result = await abortable(this.options.load(controller.signal), controller.signal);
@@ -140,7 +150,7 @@ export class UsagePoller {
 			this.diagnostic = safeDiagnostic(error, controller.signal);
 			this.failed = true;
 			this.failures++;
-			this.nextAt = this.now() + Math.min(15 * 60_000, CACHE_MS * 2 ** Math.min(this.failures - 1, 4));
+			this.nextAt = this.now() + Math.min(15 * 60_000, RETRY_BASE_MS * 2 ** Math.min(this.failures - 1, 4));
 		} finally {
 			clearTimeout(timer);
 			if (this.controller === controller) this.controller = undefined;

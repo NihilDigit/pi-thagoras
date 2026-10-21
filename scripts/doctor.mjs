@@ -77,7 +77,7 @@ try {
   for (const command of ["fast", "permission-system", "auto-review-policy-audit"]) if (!names.includes(command)) throw new Error(`Command did not load: ${command}`);
   if (agentRuns) throw new Error("Startup unexpectedly triggered a model run.");
   console.log(JSON.stringify({ ok: true, platform: process.platform, arch: process.arch, piVersion: info.piVersion,
-    model: `${settings.defaultProvider}/${settings.defaultModel}`, needsLogin: !state.model || state.model.provider === "unknown", requiredChildProtections: true, fastCommand: true,
+    model: `${settings.defaultProvider}/${settings.defaultModel}`, needsLogin: !state.model || state.model.provider === "unknown", requiredChildProtections: true,
     permissionReview: true, extensionErrors: 0, filesVerified: verified, modelRuns: agentRuns,
     login: "Run pi-thagoras /login openai if this is a new machine." }, null, 2));
 } finally {

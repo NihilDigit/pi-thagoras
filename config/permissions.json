@@ -14,8 +14,10 @@
     "edit": "allow",
     "web_search": "allow",
     "skill": "allow",
+    "subagent": "allow",
     "powershell": "ask",
-    "external_directory": {"*": "ask"},
+    "external_directory_read": {"*": "allow"},
+    "external_directory_write": {"*": "ask"},
     "path": {
       "*": "allow",
       "*.env": "deny",
@@ -32,13 +34,22 @@
     "bash": {
       "*": "ask",
       "pwd": "allow",
+      "ls": "allow",
       "ls *": "allow",
+      "rg": "allow",
       "rg *": "allow",
       "git status*": "allow",
+      "git branch*": "allow",
       "git diff*": "allow",
       "git log*": "allow",
       "git show*": "allow",
-      "git rev-parse*": "allow"
+      "git rev-parse*": "allow",
+      "git --no-optional-locks status*": "allow",
+      "git --no-optional-locks diff*": "allow",
+      "git --no-optional-locks log*": "allow",
+      "git --no-optional-locks show*": "allow",
+      "git --no-optional-locks rev-parse*": "allow",
+      "playwright-cli *": "allow"
     }
   }
 }

@@ -1,12 +1,8 @@
 #Requires -Version 7.0
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$ProjectPath,
-    [Parameter(Mandatory)][string]$RelayUrl,
     [string]$AgentRoot = $(if($env:PI_CODING_AGENT_DIR){$env:PI_CODING_AGENT_DIR}else{Join-Path $env:USERPROFILE '.pi/agent'}),
     [string]$RuntimeRoot,
-    [ValidateRange(1024,65535)][int]$Port = 4317,
-    [switch]$RelayServer,
     [switch]$Apply
 )
 $ErrorActionPreference = 'Stop'
@@ -20,33 +16,27 @@ $node = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Ob
 $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 & $python -c 'import sys; assert sys.version_info >= (3,11), "Python 3.11+ is required"'
 if ($LASTEXITCODE) { throw 'Recovery guard requires Python 3.11+.' }
-$project = (Resolve-Path -LiteralPath $ProjectPath).Path
 $pointerPath = Join-Path $root '.build/windows-current.json'
 $revision = (& git -C $root rev-parse HEAD).Trim()
 if ($LASTEXITCODE) { throw 'Cannot identify checkout. Clone with Git and --recurse-submodules.' }
 $outdated = -not (Test-Path -LiteralPath $pointerPath)
 if (-not $outdated) { $outdated = (Get-Content -LiteralPath $pointerPath -Raw | ConvertFrom-Json).rootRevision -ne $revision }
 if ($outdated) {
-    if (-not $Apply) { Write-Output 'Plan: build pinned submodules and dependencies, install a protected release via UAC, merge this user profile, and register the Host login task. Add -Apply to execute.'; return }
-    $buildArgs = @((Join-Path $root 'scripts/build-windows.mjs'))
-    if ($RelayServer) { $buildArgs += '--relay-server' }
-    & $node @buildArgs
+    if (-not $Apply) { Write-Output 'Plan: build pinned submodules and dependencies, install a protected release via UAC, and merge this user profile. Add -Apply to execute.'; return }
+    & $node (Join-Path $root 'scripts/build-windows.mjs')
     if ($LASTEXITCODE) { throw 'Windows build failed.' }
 }
 $pointer = Get-Content -LiteralPath $pointerPath -Raw | ConvertFrom-Json
 $manifest = Get-Content -LiteralPath (Join-Path $pointer.stage 'manifest.json') -Raw | ConvertFrom-Json
 if ((Get-FileHash (Join-Path $pointer.stage 'manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $pointer.manifestHash) { throw 'Release manifest changed.' }
-if ($RelayServer -and -not $manifest.software) { throw 'Rebuild with node scripts/build-windows.mjs --relay-server.' }
 if ($manifest.arch -ne (& $node -p 'process.arch')) { throw 'Release ABI does not match this machine.' }
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $release = Join-Path $env:ProgramData ('PiThagoras/' + $sid + '/releases/' + $pointer.manifestHash.Substring(0,16))
 $configure = Join-Path $root 'scripts/configure-profile.mjs'
-$profileArgs = @($configure,'--release',$release,'--source',$pointer.stage,'--agent',$AgentRoot,'--runtime',$RuntimeRoot,'--project',$project,'--relay',$RelayUrl,'--port',"$Port")
+$profileArgs = @($configure,'--release',$release,'--source',$pointer.stage,'--agent',$AgentRoot,'--runtime',$RuntimeRoot)
 & $node @profileArgs
 if ($LASTEXITCODE) { throw 'Profile preflight failed; nothing installed.' }
 if (-not $Apply) { Write-Output 'Plan only. Add -Apply to install this release and configure the listed files.'; return }
-$hostTask = Get-ScheduledTask -TaskName 'PiThagoras-Host' -ErrorAction SilentlyContinue
-if ($hostTask -and $hostTask.Description -ne 'Managed by pi-thagoras; current-user Host.') { throw 'An existing Host task belongs to a different entry. Review its migration before applying setup.' }
 $active = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'pi-launcher\.js|pi-coding-agent[\\/].*cli\.js|subagent-runner-bootstrap' })
 if ($active.Count) { throw 'Close Pi and its child tasks before applying setup.' }
 $script = Join-Path $root 'scripts/install-windows.ps1'
@@ -54,21 +44,13 @@ $installer = Start-Process -FilePath (Get-Command pwsh -CommandType Application 
 if ($installer.ExitCode) { throw 'Protected release installation failed; user profile was not changed.' }
 $active = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'pi-launcher\.js|pi-coding-agent[\\/].*cli\.js|subagent-runner-bootstrap' })
 if ($active.Count) { throw 'Pi started while installation was awaiting confirmation. Close it before applying the user profile.' }
-if ($hostTask) { Stop-ScheduledTask -TaskName 'PiThagoras-Host' }
 & $node @profileArgs --apply
-if ($LASTEXITCODE) { if($hostTask){Start-ScheduledTask -TaskName 'PiThagoras-Host'}; throw 'Profile configuration failed. Protected release is retained for inspection.' }
-$previousAgent = $env:PI_CODING_AGENT_DIR
-try {
-    $env:PI_CODING_AGENT_DIR = [IO.Path]::GetFullPath($AgentRoot)
-    & (Join-Path $release 'app/remote/enable-login-start.ps1') -Components Host -Run -Enable
-    Start-ScheduledTask -TaskName PiThagoras-Host
-} finally { $env:PI_CODING_AGENT_DIR = $previousAgent }
+if ($LASTEXITCODE) { throw 'Profile configuration failed. Protected release is retained for inspection.' }
 $bin = Join-Path ([IO.Path]::GetFullPath($AgentRoot)) 'bin'
 $userPath = [Environment]::GetEnvironmentVariable('Path','User')
 if ($bin -notin ($userPath -split ';')) { [Environment]::SetEnvironmentVariable('Path', ($bin + ';' + $userPath), 'User') }
 $env:Path = $bin + ';' + $env:Path
-Write-Output "Installed. Open a new terminal and run pi-thagoras /login openai. Host: http://127.0.0.1:$Port/"
-if ($RelayServer) {
-    Write-Output "Relay tools are installed. Save your own connector token with: & '$release/app/remote/save-tunnel-token.ps1' -Run"
-    Write-Output "Then register Relay/Tunnel: & '$release/app/remote/enable-login-start.ps1' -Components Relay,Tunnel -Run -Enable"
-}
+& (Join-Path $root 'scripts/setup-cliproxyapi.ps1') -AgentRoot $AgentRoot
+Write-Output 'Installed. Complete the two logins on a new machine:'
+Write-Output '  1. Google (Argon/Flash): pwsh -NoProfile -File "$HOME/apps/CLIProxyAPI/control.ps1" -Action Login'
+Write-Output '  2. OpenAI (Astra/Sol/Review): pi-thagoras /login openai'

@@ -1,9 +1,9 @@
 name: Windows setup
 on:
   push:
-    paths: ['setup.ps1', 'setup/**', 'scripts/**', 'agents/**', 'extensions/**', 'guards/**', 'config/**', 'models.json', 'settings.json', 'package.json', 'remote/**', 'tests/**', 'upstream/**', '.gitmodules', '.github/workflows/windows.yml']
+    paths: ['setup.ps1', 'setup/**', 'scripts/**', 'agents/**', 'extensions/**', 'guards/**', 'config/**', 'skills/**', 'APPEND_SYSTEM.md', 'models.json', 'settings.json', 'package.json', 'tests/**', 'upstream/**', '.gitmodules', '.github/workflows/windows.yml']
   pull_request:
-    paths: ['setup.ps1', 'setup/**', 'scripts/**', 'agents/**', 'extensions/**', 'guards/**', 'config/**', 'models.json', 'settings.json', 'package.json', 'remote/**', 'tests/**', 'upstream/**', '.gitmodules', '.github/workflows/windows.yml']
+    paths: ['setup.ps1', 'setup/**', 'scripts/**', 'agents/**', 'extensions/**', 'guards/**', 'config/**', 'skills/**', 'APPEND_SYSTEM.md', 'models.json', 'settings.json', 'package.json', 'tests/**', 'upstream/**', '.gitmodules', '.github/workflows/windows.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,16 +27,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
-      - name: Configure Rust toolchain
-        run: |
-          $version = (Get-Content remote/versions.json -Raw | ConvertFrom-Json).relay.testedRustVersion
-          rustup toolchain install $version --profile minimal
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          rustup default $version
       - name: Check configuration generation
         run: node --test tests/portable-profile.test.mjs
-      - name: Build locked Windows runtime and relay tools
-        run: node scripts/build-windows.mjs --relay-server
+      - name: Build locked Windows runtime
+        run: node scripts/build-windows.mjs
       - name: Verify protected installation on Windows
         run: |
           $build = Get-Content .build/windows-current.json -Raw | ConvertFrom-Json
@@ -50,7 +44,6 @@ jobs:
           if ($own.Count -ne 1 -or ($own[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write)) { throw 'Current user can modify installed code' }
           node scripts/portable-smoke.mjs $release
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          ./scripts/service-smoke.ps1 -ReleaseRoot $release
       - name: Check current checkout has no runtime state
         run: |
           git diff --exit-code
