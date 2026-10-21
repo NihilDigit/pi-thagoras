@@ -106,12 +106,14 @@ class TopRightStatusEditor extends CustomEditor {
 			if (typeof this.editorTheme?.fg === "function") return this.editorTheme.fg(color, text);
 			return text;
 		};
-		const leftBrand = this.borderColor("\u03c0 ");
-		const leftBrandWidth = visibleWidth(leftBrand);
 		const workingPart =
 			indicator && typeof indicator.renderInBorder === "function"
 				? String(indicator.renderInBorder(Math.max(12, Math.floor(width * 0.35)))).trim()
 				: "";
+		const leftBrand = workingPart
+			? `${workingPart} `
+			: this.borderColor("\u03c0 ");
+		const leftBrandWidth = visibleWidth(leftBrand);
 		const rawModel = model || "no-model";
 		const shortModel = formatShortModelName(rawModel);
 		const icon = modelIcon(rawModel);
@@ -119,8 +121,7 @@ class TopRightStatusEditor extends CustomEditor {
 		const styledThinking = thinking
 			? fg(thinkingColorRole(thinking), `${ICON_THINKING} ${thinking}`)
 			: "";
-		const modelPart = [styledModel, styledThinking].filter(Boolean).join("  ");
-		const rightContent = [workingPart, modelPart].filter(Boolean).join("  ");
+		const rightContent = [styledModel, styledThinking].filter(Boolean).join("  ");
 		const rightBadge = ` ${rightContent} ${this.borderColor("─")}`;
 		const rightBadgeWidth = visibleWidth(rightBadge);
 		if (width <= leftBrandWidth + rightBadgeWidth + 4) return base;
