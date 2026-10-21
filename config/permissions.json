@@ -49,7 +49,9 @@
       "git --no-optional-locks log*": "allow",
       "git --no-optional-locks show*": "allow",
       "git --no-optional-locks rev-parse*": "allow",
-      "playwright-cli *": "allow"
+      "playwright-cli *": "allow",
+      "printf *": "allow",
+      "clip": "allow"
     }
   }
 }
