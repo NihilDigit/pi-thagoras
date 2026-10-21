@@ -58,6 +58,14 @@ export function planProfile({ releaseRoot, sourceRoot = releaseRoot, checkoutRoo
   policy.permission.path[join(agentDir, "auth.json").replaceAll("\\", "/")] = "deny";
   const reviewPath = join(agentDir, "extensions", "pi-auto-review", "config.json");
   const review = defaults(read(reviewPath), { model: "openai/codex-auto-review" });
+  const subagentConfigPath = join(agentDir, "extensions", "subagent", "config.json");
+  const subagentConfig = defaults(read(subagentConfigPath), read(join(seed, "config", "subagent.json"), {
+    asyncByDefault: true,
+    forceTopLevelAsync: true,
+    asyncWidget: false,
+    fleetView: false,
+    inlineToolDisplay: "summary",
+  }));
   const piCli = entry("@earendil-works/pi-coding-agent", "dist/bundle/cli.js");
   const release = read(join(sourceRoot, "release.json"));
   const recoveryState = join(runtimeRoot, "recovery");
@@ -72,7 +80,7 @@ export function planProfile({ releaseRoot, sourceRoot = releaseRoot, checkoutRoo
   const append = start >= 0 ? current.slice(0, start) + block + current.slice(finish + end.length) : `${current.trimEnd()}${current.trim() ? "\n\n" : ""}${block}\n`;
   const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
   const launcher = `$env:PI_CODING_AGENT_DIR=${quote(agentDir)}\n$env:PI_MANAGED_INSTALL_ROOT=${quote(releaseRoot)}\n$env:PI_THAGORAS_RECOVERY_STATE=${quote(recoveryState)}\n& node ${quote(piCli)} @args\nexit $LASTEXITCODE\n`;
-  return { info, files: new Map([[settingsPath, json(settings)], [modelPath, json(models)], [permissionPath, json(policy)], [reviewPath, json(review)], [infoPath, json(info)],
+  return { info, files: new Map([[settingsPath, json(settings)], [modelPath, json(models)], [permissionPath, json(policy)], [reviewPath, json(review)], [subagentConfigPath, json(subagentConfig)], [infoPath, json(info)],
     [guard, wrapper], [appendPath, append], [join(agentDir, "bin", "pi-thagoras.ps1"), launcher],
     [join(agentDir, "bin", "pi-thagoras.cmd"), '@echo off\r\npwsh -NoProfile -File "%~dp0pi-thagoras.ps1" %*\r\n']]) };
 }

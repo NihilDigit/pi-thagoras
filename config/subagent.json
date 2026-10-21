@@ -1,0 +1,7 @@
+{
+  "asyncByDefault": true,
+  "forceTopLevelAsync": true,
+  "asyncWidget": false,
+  "fleetView": false,
+  "inlineToolDisplay": "summary"
+}

@@ -22,10 +22,12 @@ foreach ($p in $toRemove) {
     }
 }
 
-Write-Host '2. 同步 APPEND_SYSTEM.md、models.json 与 permissions.json...' -ForegroundColor Cyan
+Write-Host '2. 同步 APPEND_SYSTEM.md、models.json、permissions.json 与 subagent/config.json...' -ForegroundColor Cyan
 Copy-Item -LiteralPath (Join-Path $repo 'APPEND_SYSTEM.md') -Destination (Join-Path $agent 'APPEND_SYSTEM.md') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'models.json') -Destination (Join-Path $agent 'models.json') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'config\permissions.json') -Destination (Join-Path $agent 'extensions\pi-permission-system\config.json') -Force
+New-Item -ItemType Directory -Path (Join-Path $agent 'extensions\subagent') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'config\subagent.json') -Destination (Join-Path $agent 'extensions\subagent\config.json') -Force
 
 Write-Host '3. 切换 CLIProxyAPI 计划任务为 wscript 无窗口后台运行...' -ForegroundColor Cyan
 $cpaControl = Join-Path $env:USERPROFILE 'apps\CLIProxyAPI\control.ps1'

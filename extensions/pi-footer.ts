@@ -180,7 +180,7 @@ export default function (pi: ExtensionAPI) {
 							? "warning"
 							: "accent";
 					const styledBar = theme.fg(barRole, rawBar);
-					return renderFooter({
+					const baseLines = renderFooter({
 						cwd: ctx.sessionManager.getCwd(), home: process.env.USERPROFILE ?? process.env.HOME,
 						branch: footerData.getGitBranch() ?? run.gitBranch, git: run.git,
 						bar: styledBar,
@@ -194,6 +194,9 @@ export default function (pi: ExtensionAPI) {
 						tps: run.tps,
 						statuses: footerData.getExtensionStatuses(),
 					}, width);
+					const drawerRender = (globalThis as any).__piSubagentDrawerLines as ((w: number, t: any) => string[]) | undefined;
+					const drawerLines = typeof drawerRender === "function" ? drawerRender(width, theme) : [];
+					return drawerLines.length > 0 ? [...baseLines, ...drawerLines] : baseLines;
 				},
 			};
 		});
