@@ -1,8 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { row } from "./pi-footer/layout.ts";
+import { GIT_ICON, gitBranchFromPorcelain, gitSummary } from "./pi-footer/core.ts";
+import { formatGitStatus, row } from "./pi-footer/layout.ts";
 
 export const COMPACT_THRESHOLD_TOKENS = 512_000;
 export const MAX_LINE_CHARS = 2_000;
@@ -52,14 +54,39 @@ function modelIcon(rawModelId: string): string {
 	return ICON_MODEL;
 }
 
-function agentModelBadge(agentName: string, rawModel?: string): string {
-	if (rawModel) return `${modelIcon(rawModel)} ${formatShortModelName(rawModel)}`;
-	const lower = agentName.toLowerCase();
-	if (lower === "flash") return `${ICON_GOOGLE} Gemini-Flash`;
-	if (lower === "argon") return `${ICON_GOOGLE} Gemini-Argon`;
-	if (lower === "astra") return `${ICON_OPENAI} GPT-Astra`;
-	if (lower === "sol") return `${ICON_OPENAI} GPT-Sol`;
-	return "";
+function defaultModelForAgent(agentName: string): string {
+	switch (agentName.toLowerCase()) {
+		case "scout":
+		case "flash":
+			return "cliproxyapi/gemini-3.8-flash-high";
+		case "worker":
+		case "sol":
+			return "openai/gpt-6.1-sol";
+		case "reviewer":
+		case "lead":
+		case "astra":
+			return "openai/gpt-6-astra";
+		case "argon":
+			return "cliproxyapi/gemini-4-argon-high";
+		default:
+			return "";
+	}
+}
+
+export function formatSubagentModelName(rawModelId: string): string {
+	const base = (rawModelId || "no-model").trim().split("/").at(-1) ?? "no-model";
+	const stripped = base.replace(/-(?:minimal|low|medium|high|xhigh|max|thinking)$/i, "");
+	const gemini = stripped.match(/^gemini-[\d.]+-([a-z0-9]+)/i);
+	if (gemini?.[1]) return capitalize(gemini[1]);
+	const gptRole = stripped.match(/^gpt-[\d.]+-([a-z0-9]+)/i);
+	if (gptRole?.[1]) return capitalize(gptRole[1]);
+	return formatShortModelName(rawModelId);
+}
+
+export function agentModelBadge(agentName: string, rawModel?: string): string {
+	const resolved = (rawModel || "").trim() || defaultModelForAgent(agentName);
+	if (!resolved) return "";
+	return `${modelIcon(resolved)} ${formatSubagentModelName(resolved)}`;
 }
 
 function thinkingColorRole(level: string): string {
@@ -111,15 +138,22 @@ interface TopRightState {
 }
 
 class TopRightStatusEditor extends CustomEditor {
+	private readonly editorTheme: any;
+	private readonly getState: () => TopRightState;
+	private readonly onSubagentNav: (data: string, isEmpty: boolean) => boolean;
+
 	constructor(
 		tui: any,
-		private readonly editorTheme: any,
+		editorTheme: any,
 		keybindings: any,
-		private readonly getState: () => TopRightState,
-		private readonly onSubagentNav: (data: string, isEmpty: boolean) => boolean,
+		getState: () => TopRightState,
+		onSubagentNav: (data: string, isEmpty: boolean) => boolean,
 		options?: any,
 	) {
 		super(tui, editorTheme, keybindings, { ...options, embedWorkingStatus: true });
+		this.editorTheme = editorTheme;
+		this.getState = getState;
+		this.onSubagentNav = onSubagentNav;
 	}
 
 	override handleInput(data: string): void {
@@ -149,14 +183,15 @@ class TopRightStatusEditor extends CustomEditor {
 			indicator && typeof indicator.renderInBorder === "function"
 				? String(indicator.renderInBorder(Math.max(12, Math.floor(width * 0.35)))).trim()
 				: "";
-		const extraLabels = [reviewingLabel, subagentLabel].filter(Boolean).join("  ");
 		let leftStatus = "";
-		if (workingPart && extraLabels) {
-			leftStatus = `${workingPart} ${fg("dim", "│")} ${this.borderColor(extraLabels)}`;
+		if (workingPart && reviewingLabel) {
+			leftStatus = `${workingPart} ${fg("dim", "│")} ${this.borderColor(reviewingLabel)}`;
 		} else if (workingPart) {
 			leftStatus = workingPart;
-		} else if (extraLabels) {
-			leftStatus = `${fg("accent", spinnerFrame)} ${this.borderColor(extraLabels)}`;
+		} else if (reviewingLabel) {
+			leftStatus = `${fg("accent", spinnerFrame)} ${this.borderColor(reviewingLabel)}`;
+		} else if (subagentLabel) {
+			leftStatus = `${fg("accent", spinnerFrame)} ${this.borderColor("Working")}`;
 		}
 		const leftBrand = leftStatus
 			? `${leftStatus} `
@@ -169,8 +204,16 @@ class TopRightStatusEditor extends CustomEditor {
 		const styledThinking = thinking
 			? fg(thinkingColorRole(thinking), `${ICON_THINKING} ${thinking}`)
 			: "";
-		const rightContent = [styledModel, styledThinking].filter(Boolean).join("  ");
-		const rightBadge = ` ${rightContent} ${this.borderColor("─")}`;
+		const mainRight = [styledModel, styledThinking].filter(Boolean).join("  ");
+		const styledSubagents = subagentLabel ? fg("dim", subagentLabel) : "";
+		const fullRightContent = styledSubagents
+			? `${styledSubagents} ${fg("dim", "│")} ${mainRight}`
+			: mainRight;
+		const fullRightBadge = ` ${fullRightContent} ${this.borderColor("─")}`;
+		const fallbackRightBadge = ` ${mainRight} ${this.borderColor("─")}`;
+		const rightBadge = width > leftBrandWidth + visibleWidth(fullRightBadge) + 4
+			? fullRightBadge
+			: fallbackRightBadge;
 		const rightBadgeWidth = visibleWidth(rightBadge);
 		if (width <= leftBrandWidth + rightBadgeWidth + 4) return base;
 		const middleWidth = Math.max(1, width - leftBrandWidth - rightBadgeWidth);
@@ -220,7 +263,7 @@ function renderCompactAutoReviewLines(data: any, theme: any, width: number): str
 		const m = members[0]!;
 		const surface = m.surface || "tool";
 		const target = m.target || data.fullCommand || "";
-		detail = [surface, target].filter(Boolean).join(" · ");
+		detail = [surface, target].filter(Boolean).join(" ");
 		if (!allowed && m.rationale) detail = `${detail ? `${detail} — ` : ""}${m.rationale}`;
 		if (!allowed && typeof m.recoveryCommand === "string") recovery = m.recoveryCommand;
 		if (typeof m.durationMs === "number") meta = `${(m.durationMs / 1000).toFixed(1)}s`;
@@ -228,7 +271,7 @@ function renderCompactAutoReviewLines(data: any, theme: any, width: number): str
 		const head = rawLines[0] ?? "";
 		const surface = head.split("·").map((s: string) => s.trim()).at(-1) ?? "";
 		const body = rawLines[1] ?? "";
-		detail = [surface && surface !== "allowed" && surface !== "denied" ? surface : "", body].filter(Boolean).join(" · ");
+		detail = [surface && surface !== "allowed" && surface !== "denied" ? surface : "", body].filter(Boolean).join(" ");
 		for (const line of rawLines.slice(1)) {
 			if (line.startsWith("use /auto-review-")) recovery = line.replace(/^use\s+/, "").replace(/\s+for one exact retry$/, "");
 			const dur = line.match(/\b(\d+(?:\.\d+)?(?:ms|s))\b/);
@@ -252,6 +295,7 @@ export default function (pi: ExtensionAPI) {
 	let currentModelId = "";
 	let requestRender = () => {};
 	const subagentItems = new Map<string, SubagentItem>();
+	const workflowRuns = new Map<string, { asyncDir: string; model?: string; startedAt: number; state: string }>();
 	let drawerOpen = false;
 	let selectedDrawerKey = "";
 	let reviewingActive = false;
@@ -292,35 +336,112 @@ export default function (pi: ExtensionAPI) {
 		return deduplicatedItems(false).slice(-6);
 	}
 
+	function hasActiveWorkflows(): boolean {
+		for (const wf of workflowRuns.values()) {
+			if (!TERMINAL_STATES.has(wf.state.toLowerCase())) return true;
+		}
+		return false;
+	}
+
+	function syncItemFromDisk(item: SubagentItem) {
+		if (!item.asyncDir) return;
+		try {
+			const statusPath = join(item.asyncDir, "status.json");
+			if (!existsSync(statusPath)) return;
+			const parsed = JSON.parse(readFileSync(statusPath, "utf8"));
+			if (typeof parsed?.totalTokens === "number") item.tokens = parsed.totalTokens;
+			else if (typeof parsed?.totalTokens?.total === "number") item.tokens = parsed.totalTokens.total;
+			else if (typeof parsed?.usageBudget?.usedTokens === "number") item.tokens = parsed.usageBudget.usedTokens;
+			if (typeof parsed?.model === "string" && parsed.model) item.model = parsed.model;
+			if (Array.isArray(parsed?.steps)) {
+				const step = parsed.steps[item.stepIndex ?? 0];
+				if (step) {
+					if (typeof step.status === "string") item.state = step.status;
+					if (typeof step.tokens === "number") item.tokens = step.tokens;
+					else if (typeof step.tokens?.total === "number") item.tokens = step.tokens.total;
+					const stepModel =
+						(typeof step.resolvedModel?.model === "string" && step.resolvedModel.model) ||
+						(typeof step.model === "string" && step.model) ||
+						(typeof step.launchModel === "string" && step.launchModel) ||
+						(typeof step.requestedModel === "string" && step.requestedModel);
+					if (stepModel) item.model = stepModel;
+				}
+			} else if (typeof parsed?.state === "string") {
+				item.state = parsed.state;
+			}
+			if (TERMINAL_STATES.has(item.state.toLowerCase()) && !item.endedAt) {
+				item.endedAt = typeof parsed?.endedAt === "number" ? parsed.endedAt : Date.now();
+			}
+		} catch {}
+	}
+
+	function syncWorkflowFromDisk(workflowId: string, wf: { asyncDir: string; model?: string; startedAt: number; state: string }) {
+		if (!wf.asyncDir) return;
+		try {
+			const statusPath = join(wf.asyncDir, "status.json");
+			if (!existsSync(statusPath)) return;
+			const parsed = JSON.parse(readFileSync(statusPath, "utf8"));
+			if (typeof parsed?.state === "string") wf.state = parsed.state;
+			if (!Array.isArray(parsed?.steps)) return;
+			const runsRoot = dirname(wf.asyncDir);
+			parsed.steps.forEach((step: any, index: number) => {
+				if (!step || typeof step !== "object") return;
+				const slotKey = `${workflowId}:${typeof step.workflowKey === "string" && step.workflowKey ? step.workflowKey : `step-${index}`}`;
+				const childRunId = typeof step.runId === "string" && step.runId ? step.runId : undefined;
+				const childAsyncDir = childRunId ? join(runsRoot, childRunId) : wf.asyncDir;
+				const existing = subagentItems.get(slotKey);
+				const stepModel =
+					(typeof step.resolvedModel?.model === "string" && step.resolvedModel.model) ||
+					(typeof step.model === "string" && step.model) ||
+					(typeof step.launchModel === "string" && step.launchModel) ||
+					existing?.model ||
+					wf.model;
+				const stepTokens =
+					typeof step.tokens === "number"
+						? step.tokens
+						: typeof step.tokens?.total === "number"
+							? step.tokens.total
+							: existing?.tokens;
+				const stepState = typeof step.status === "string" ? step.status : wf.state;
+				const item: SubagentItem = {
+					key: slotKey,
+					runId: childRunId ?? workflowId,
+					agent: typeof step.agent === "string" && step.agent ? step.agent : existing?.agent ?? "worker",
+					model: stepModel,
+					state: stepState,
+					startedAt: typeof step.startedAt === "number" ? step.startedAt : existing?.startedAt ?? wf.startedAt,
+					endedAt: existing?.endedAt,
+					tokens: stepTokens,
+					asyncDir: childAsyncDir,
+					stepIndex: childRunId ? 0 : index,
+				};
+				syncItemFromDisk(item);
+				if (TERMINAL_STATES.has(wf.state.toLowerCase()) && !TERMINAL_STATES.has(item.state.toLowerCase())) {
+					item.state = wf.state;
+					item.endedAt ??= Date.now();
+				}
+				subagentItems.set(slotKey, item);
+			});
+		} catch {}
+	}
+
 	function syncTimer() {
-		const needTimer = runningItems().length > 0 || reviewingActive;
+		const needTimer = runningItems().length > 0 || hasActiveWorkflows() || reviewingActive;
 		if (needTimer && !animTimer) {
 			animTimer = setInterval(() => {
 				spinnerIndex = (spinnerIndex + 1) % SPINNER_FRAMES.length;
 				tickCount++;
-				if (tickCount % 20 === 0) {
-					for (const item of subagentItems.values()) {
-						if (!item.asyncDir || TERMINAL_STATES.has(item.state.toLowerCase())) continue;
-						try {
-							const statusPath = join(item.asyncDir, "status.json");
-							if (existsSync(statusPath)) {
-								const parsed = JSON.parse(readFileSync(statusPath, "utf8"));
-								if (typeof parsed?.totalTokens === "number") item.tokens = parsed.totalTokens;
-								if (Array.isArray(parsed?.steps) && item.stepIndex !== undefined) {
-									const step = parsed.steps[item.stepIndex];
-									if (typeof step?.status === "string") item.state = step.status;
-									if (typeof step?.tokens === "number") item.tokens = step.tokens;
-								} else if (typeof parsed?.state === "string") {
-									item.state = parsed.state;
-								}
-								if (TERMINAL_STATES.has(item.state.toLowerCase()) && !item.endedAt) {
-									item.endedAt = Date.now();
-								}
-							}
-						} catch {}
+				if (tickCount % 15 === 0) {
+					for (const [wfId, wf] of workflowRuns.entries()) {
+						syncWorkflowFromDisk(wfId, wf);
 					}
-					if (runningItems().length === 0) drawerOpen = false;
-					if (runningItems().length === 0 && !reviewingActive) syncTimer();
+					for (const item of subagentItems.values()) {
+						if (!TERMINAL_STATES.has(item.state.toLowerCase())) {
+							syncItemFromDisk(item);
+						}
+					}
+					if (runningItems().length === 0 && !hasActiveWorkflows()) drawerOpen = false;
+					if (runningItems().length === 0 && !hasActiveWorkflows() && !reviewingActive) syncTimer();
 				}
 				if (activeCtx?.mode === "tui") requestRender();
 			}, 35);
@@ -338,14 +459,15 @@ export default function (pi: ExtensionAPI) {
 		const counts = new Map<string, number>();
 		for (const item of active) {
 			if (!item.agent || item.agent === "workflow") continue;
-			counts.set(item.agent, (counts.get(item.agent) ?? 0) + 1);
+			const badge = agentModelBadge(item.agent, item.model) || item.agent;
+			counts.set(badge, (counts.get(badge) ?? 0) + 1);
 		}
-		if (counts.size === 0) return "subagent";
+		if (counts.size === 0) return "";
 		const parts: string[] = [];
-		for (const [name, count] of counts) {
-			parts.push(count > 1 ? `${name} ×${count}` : name);
+		for (const [badge, count] of counts) {
+			parts.push(`${badge} x${count}`);
 		}
-		return parts.join(", ");
+		return parts.join("  ");
 	}
 
 	function readSubagentTranscript(item: SubagentItem): string[] {
@@ -394,7 +516,7 @@ export default function (pi: ExtensionAPI) {
 						? theme.fg("success", item.state)
 						: theme.fg("accent", `${SPINNER_FRAMES[spinnerIndex]} ${item.state}`);
 					const headerLeft = ` ${theme.fg("text", item.agent)}${badge ? ` ${sep} ${theme.fg("dim", badge)}` : ""} ${sep} ${st}`;
-					const headerRight = `${theme.fg("dim", [elapsed, tok, "↑↓ scroll · esc close"].filter(Boolean).join(" │ "))} `;
+					const headerRight = `${theme.fg("dim", [elapsed, tok, "↑↓ scroll  esc close"].filter(Boolean).join(" │ "))} `;
 					const topLine = theme.fg("accent", "─".repeat(w));
 					const headerLine = row(headerLeft, headerRight, w, 0.55);
 					const dividerLine = theme.fg("dim", "─".repeat(w));
@@ -409,6 +531,225 @@ export default function (pi: ExtensionAPI) {
 				dispose() {
 					clearInterval(timer);
 				},
+			};
+		});
+	}
+
+	interface GitChangeEntry {
+		xy: string;
+		path: string;
+		origPath?: string;
+		kind: "conflict" | "staged" | "modified" | "untracked";
+	}
+
+	function parseGitChanges(stdout: string): { branch: string; summary: string; entries: GitChangeEntry[] } {
+		const branch = gitBranchFromPorcelain(stdout) ?? "HEAD";
+		const summary = gitSummary(stdout);
+		const entries: GitChangeEntry[] = [];
+		const records = stdout.split("\0");
+		for (let i = 0; i < records.length; i++) {
+			const rec = records[i];
+			if (!rec || rec.startsWith("## ")) continue;
+			const xy = rec.slice(0, 2);
+			const filePath = rec.slice(3);
+			let origPath: string | undefined;
+			if (xy.includes("R") || xy.includes("C")) {
+				origPath = records[++i] || undefined;
+			}
+			let kind: GitChangeEntry["kind"] = "modified";
+			if (xy === "??") kind = "untracked";
+			else if (["DD", "AU", "UD", "UA", "DU", "AA", "UU"].includes(xy)) kind = "conflict";
+			else if (xy[0] !== " " && xy[0] !== "!" && (xy[1] === " " || xy[1] === "!")) kind = "staged";
+			entries.push({ xy, path: filePath, origPath, kind });
+		}
+		return { branch, summary, entries };
+	}
+
+	function loadFileDiffLines(cwd: string, entry: GitChangeEntry): string[] {
+		if (entry.kind === "untracked") {
+			try {
+				const full = join(cwd, entry.path);
+				const st = statSync(full);
+				if (st.isDirectory()) return [`Untracked directory: ${entry.path}`];
+				if (st.size > 256 * 1024) return [`Untracked file (${Math.round(st.size / 1024)} KB, too large to preview)`];
+				const buf = readFileSync(full);
+				if (buf.subarray(0, 1024).includes(0)) return ["Binary untracked file"];
+				const raw = buf.toString("utf8").split(/\r?\n/);
+				return [`--- /dev/null`, `+++ b/${entry.path}`, `@@ -0,0 +1,${raw.length} @@`, ...raw.slice(0, 400).map(l => `+${l}`)];
+			} catch {
+				return [`Unable to read untracked file: ${entry.path}`];
+			}
+		}
+		for (const args of [
+			["--no-optional-locks", "diff", "HEAD", "--", entry.path],
+			["--no-optional-locks", "diff", "--cached", "--", entry.path],
+			["--no-optional-locks", "diff", "--", entry.path],
+		]) {
+			const res = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 4000, windowsHide: true });
+			if (res.status === 0 && res.stdout && res.stdout.trim()) {
+				return res.stdout.replace(/\t/g, "    ").split(/\r?\n/);
+			}
+		}
+		return [`No textual diff available for ${entry.path} (${entry.xy.trim()})`];
+	}
+
+	function styleDiffLine(line: string, theme: any): string {
+		if (line.startsWith("@@")) return theme.fg("accent", line);
+		if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff --git") || line.startsWith("index ")) {
+			return theme.fg("dim", line);
+		}
+		if (line.startsWith("+")) return theme.fg("success", line);
+		if (line.startsWith("-")) return theme.fg("error", line);
+		return theme.fg("muted", line);
+	}
+
+	function openGitChangesOverlay() {
+		if (!activeCtx || activeCtx.mode !== "tui") return;
+		const cwd = activeCtx.sessionManager.getCwd?.() ?? activeCtx.cwd;
+		void activeCtx.ui.custom((tui, theme, _kb, done) => {
+			let selectedIndex = 0;
+			let diffOffset = 0;
+			let state = { branch: "HEAD", summary: "clean", entries: [] as GitChangeEntry[] };
+			const diffCache = new Map<string, string[]>();
+
+			const refresh = () => {
+				diffCache.clear();
+				const res = spawnSync(
+					"git",
+					["--no-optional-locks", "status", "--porcelain=v1", "--branch", "--untracked-files=all", "-z"],
+					{ cwd, encoding: "utf8", timeout: 4000, windowsHide: true },
+				);
+				if (res.status === 0 && typeof res.stdout === "string") {
+					state = parseGitChanges(res.stdout);
+				} else {
+					state = { branch: "HEAD", summary: "", entries: [] };
+				}
+				selectedIndex = Math.max(0, Math.min(selectedIndex, Math.max(0, state.entries.length - 1)));
+				diffOffset = 0;
+			};
+
+			refresh();
+
+			const currentDiff = (): string[] => {
+				const entry = state.entries[selectedIndex];
+				if (!entry) return [];
+				const key = `${entry.xy}:${entry.path}`;
+				let cached = diffCache.get(key);
+				if (!cached) {
+					cached = loadFileDiffLines(cwd, entry);
+					diffCache.set(key, cached);
+				}
+				return cached;
+			};
+
+			return {
+				handleInput(data: string) {
+					if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "shift+left")) {
+						done(undefined);
+						return;
+					}
+					if (matchesKey(data, "r")) {
+						refresh();
+						tui.requestRender();
+						return;
+					}
+					if (matchesKey(data, "up") || matchesKey(data, "k")) {
+						if (state.entries.length > 0) {
+							selectedIndex = Math.max(0, selectedIndex - 1);
+							diffOffset = 0;
+							tui.requestRender();
+						}
+						return;
+					}
+					if (matchesKey(data, "down") || matchesKey(data, "j")) {
+						if (state.entries.length > 0) {
+							selectedIndex = Math.min(state.entries.length - 1, selectedIndex + 1);
+							diffOffset = 0;
+							tui.requestRender();
+						}
+						return;
+					}
+					const windowSize = 18;
+					const totalLines = currentDiff().length;
+					const maxOffset = Math.max(0, totalLines - windowSize);
+					if (
+						matchesKey(data, "right") ||
+						matchesKey(data, "l") ||
+						matchesKey(data, "pageDown") ||
+						matchesKey(data, "shift+down")
+					) {
+						diffOffset = Math.min(maxOffset, diffOffset + 10);
+						tui.requestRender();
+					} else if (
+						matchesKey(data, "left") ||
+						matchesKey(data, "h") ||
+						matchesKey(data, "pageUp") ||
+						matchesKey(data, "shift+up")
+					) {
+						diffOffset = Math.max(0, diffOffset - 10);
+						tui.requestRender();
+					}
+				},
+				render(width: number): string[] {
+					const w = Math.max(32, width);
+					const sep = theme.fg("dim", "│");
+					const topLine = theme.fg("accent", "─".repeat(w));
+					const dividerLine = theme.fg("dim", "─".repeat(w));
+					const branchPart = theme.fg("accent", `${GIT_ICON.branch} ${state.branch}`);
+					const statusPart = formatGitStatus(state.summary, (role, text) => theme.fg(role, text));
+					const selected = state.entries[selectedIndex];
+					const selectedLabel = selected
+						? theme.fg("text", selected.origPath ? `${selected.origPath} -> ${selected.path}` : selected.path)
+						: "";
+					const headerLeft = ` ${[branchPart, statusPart, selectedLabel].filter(Boolean).join(` ${sep} `)}`;
+					const headerRight = `${theme.fg("dim", "↑↓ file │ ←→ scroll diff │ r refresh │ esc close")} `;
+					const headerLine = row(headerLeft, headerRight, w, 0.52);
+
+					if (state.entries.length === 0) {
+						const cleanLine = `  ${theme.fg("success", `${GIT_ICON.clean} Working tree clean`)}`;
+						return [topLine, headerLine, dividerLine, cleanLine, topLine];
+					}
+
+					const windowSize = 18;
+					const leftWidth = Math.max(20, Math.min(40, Math.floor(w * 0.32)));
+					const rightWidth = Math.max(12, w - leftWidth - 3);
+					const listStart = Math.max(
+						0,
+						Math.min(selectedIndex - Math.floor(windowSize / 2), Math.max(0, state.entries.length - windowSize)),
+					);
+					const diffLines = currentDiff();
+					const body: string[] = [];
+
+					for (let i = 0; i < windowSize; i++) {
+						const entry = state.entries[listStart + i];
+						let leftCell = "";
+						if (entry) {
+							const isSel = listStart + i === selectedIndex;
+							const cursor = isSel ? theme.fg("accent", "❯") : " ";
+							const icon =
+								entry.kind === "conflict"
+									? theme.fg("error", GIT_ICON.conflict)
+									: entry.kind === "staged"
+										? theme.fg("success", GIT_ICON.staged)
+										: entry.kind === "untracked"
+											? theme.fg("muted", GIT_ICON.untracked)
+											: theme.fg("warning", GIT_ICON.modified);
+							const rawPath = truncateToWidth(entry.path.replace(/\\/g, "/"), Math.max(8, leftWidth - 6), "…");
+							const styledPath = isSel ? theme.fg("text", rawPath) : theme.fg("muted", rawPath);
+							leftCell = ` ${cursor} ${icon} ${styledPath}`;
+						}
+						const padLen = Math.max(0, leftWidth - visibleWidth(leftCell));
+						const paddedLeft = leftCell + " ".repeat(padLen);
+
+						const rawDiff = diffLines[diffOffset + i] ?? "";
+						const trimmedDiff = truncateToWidth(rawDiff, rightWidth, "…");
+						const styledDiff = rawDiff ? styleDiffLine(trimmedDiff, theme) : "";
+						body.push(truncateToWidth(`${paddedLeft} ${sep} ${styledDiff}`, w, ""));
+					}
+
+					return [topLine, headerLine, dividerLine, ...body, topLine];
+				},
+				invalidate() {},
 			};
 		});
 	}
@@ -447,6 +788,11 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	function handleDrawerKey(data: string, editorEmpty: boolean): boolean {
+		if (editorEmpty && matchesKey(data, "shift+left")) {
+			drawerOpen = false;
+			openGitChangesOverlay();
+			return true;
+		}
 		const list = drawerCandidates();
 		if (list.length === 0) {
 			drawerOpen = false;
@@ -514,7 +860,21 @@ export default function (pi: ExtensionAPI) {
 		const id = typeof raw.id === "string" ? raw.id : typeof raw.runId === "string" ? raw.runId : undefined;
 		if (!id) return;
 		const asyncDir = typeof raw.asyncDir === "string" ? raw.asyncDir : undefined;
-		if (raw.mode === "workflow") return;
+		if (raw.mode === "workflow") {
+			if (asyncDir) {
+				const wf = {
+					asyncDir,
+					model: typeof raw.model === "string" && raw.model ? raw.model : undefined,
+					startedAt: Date.now(),
+					state: "running",
+				};
+				workflowRuns.set(id, wf);
+				syncWorkflowFromDisk(id, wf);
+			}
+			syncTimer();
+			if (activeCtx?.mode === "tui") requestRender();
+			return;
+		}
 		const agents = Array.isArray(raw.agents)
 			? raw.agents.filter((a: unknown): a is string => typeof a === "string" && Boolean(a))
 			: typeof raw.agent === "string" && raw.agent
@@ -522,15 +882,18 @@ export default function (pi: ExtensionAPI) {
 				: ["subagent"];
 		agents.forEach((agent: string, index: number) => {
 			const key = agents.length > 1 ? `${id}:${index}` : id;
-			subagentItems.set(key, {
+			const item: SubagentItem = {
 				key,
 				runId: id,
 				agent,
+				model: typeof raw.model === "string" && raw.model ? raw.model : undefined,
 				state: "running",
 				startedAt: Date.now(),
 				asyncDir,
 				stepIndex: index,
-			});
+			};
+			syncItemFromDisk(item);
+			subagentItems.set(key, item);
 		});
 		syncTimer();
 		if (activeCtx?.mode === "tui") requestRender();
@@ -555,17 +918,20 @@ export default function (pi: ExtensionAPI) {
 			const alreadyTerminal = prior ? TERMINAL_STATES.has(prior.state.toLowerCase()) : false;
 			const agent = typeof raw.agent === "string" && raw.agent ? raw.agent : prior?.agent ?? "subagent";
 			const asyncDir = typeof raw.asyncDir === "string" ? raw.asyncDir : prior?.asyncDir;
-			subagentItems.set(slotKey, {
+			const item: SubagentItem = {
 				key: slotKey,
 				runId: childRunId ?? slotKey,
 				agent,
+				model: typeof raw.model === "string" && raw.model ? raw.model : prior?.model,
 				state: alreadyTerminal && prior ? prior.state : "running",
 				startedAt: prior?.startedAt ?? Date.now(),
 				endedAt: alreadyTerminal ? prior?.endedAt : undefined,
 				tokens: prior?.tokens,
 				asyncDir,
 				stepIndex: typeof raw.stepIndex === "number" ? raw.stepIndex : prior?.stepIndex ?? 0,
-			});
+			};
+			syncItemFromDisk(item);
+			subagentItems.set(slotKey, item);
 		} else if (raw.status === "stopped") {
 			for (const [k, v] of subagentItems) {
 				if (k === slotKey || k === `${raw.runId}:${raw.childId}` || (childRunId && (k === childRunId || v.runId === childRunId))) {
@@ -585,15 +951,21 @@ export default function (pi: ExtensionAPI) {
 		if (!raw || typeof raw !== "object") return;
 		const id = typeof raw.runId === "string" ? raw.runId : typeof raw.id === "string" ? raw.id : undefined;
 		if (!id) return;
+		const wf = workflowRuns.get(id);
+		if (wf) {
+			syncWorkflowFromDisk(id, wf);
+			wf.state = "complete";
+		}
 		for (const [key, item] of subagentItems) {
 			if (key === id || key.startsWith(`${id}:`) || item.runId === id) {
+				syncItemFromDisk(item);
 				if (!TERMINAL_STATES.has(item.state.toLowerCase())) {
 					item.state = "complete";
 				}
 				item.endedAt ??= Date.now();
 			}
 		}
-		if (runningItems().length === 0) drawerOpen = false;
+		if (runningItems().length === 0 && !hasActiveWorkflows()) drawerOpen = false;
 		syncTimer();
 		if (activeCtx?.mode === "tui") requestRender();
 	});
@@ -602,6 +974,7 @@ export default function (pi: ExtensionAPI) {
 		activeCtx = ctx;
 		currentModelId = ctx.model?.id ?? "no-model";
 		subagentItems.clear();
+		workflowRuns.clear();
 		drawerOpen = false;
 		reviewingActive = false;
 		syncTimer();
@@ -647,6 +1020,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", () => {
 		subagentItems.clear();
+		workflowRuns.clear();
 		drawerOpen = false;
 		reviewingActive = false;
 		syncTimer();

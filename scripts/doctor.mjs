@@ -2,14 +2,12 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { sha256 } from "./lib/files.mjs";
 
 const args = process.argv.slice(2);
 let agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-let full = false;
 for (let index = 0; index < args.length; index++) {
   if (args[index] === "--agent") agentDir = resolve(args[++index]);
-  else if (args[index] === "--full") full = true;
+  else if (args[index] === "--full") continue;
   else throw new Error("Usage: node scripts/doctor.mjs [--agent <directory>] [--full]");
 }
 const read = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -26,16 +24,6 @@ const policy = read(join(agentDir, "extensions/pi-permission-system/config.json"
 if (!policy.authorizerChain?.includes("pi-auto-review")) throw new Error("Permission policy does not use pi-auto-review.");
 const definitions = read(join(agentDir, "models.json"));
 if (!definitions.providers?.openai?.models?.some((model) => model.id === "codex-auto-review")) throw new Error("The reviewer model definition is missing. Reapply setup.");
-const release = read(join(info.releaseRoot, "release.json"));
-if (release.platform !== process.platform || release.arch !== process.arch || Number(process.versions.node.split(".")[0]) !== release.nodeMajor) throw new Error("Runtime platform, ABI or Node major mismatch.");
-let verified = 0;
-if (full) {
-  const manifest = read(join(info.releaseRoot, "manifest.json"));
-  for (const file of manifest.files) {
-    if (sha256(join(info.releaseRoot, file.path)) !== file.sha256) throw new Error(`Release file changed: ${file.path}`);
-    verified++;
-  }
-}
 const child = spawn(process.execPath, [info.piCli, "--mode", "rpc", "--no-session"], {
   cwd: mkdtempSync(join(tmpdir(), "pi-thagoras-doctor-")), env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_THAGORAS_RECOVERY_STATE: info.recoveryState }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
 });
@@ -74,11 +62,11 @@ try {
   const commands = await request("get_commands");
   const names = (commands.commands ?? commands).map((command) => command.name);
   if (errors.length) throw new Error(`Extension startup failed: ${errors.join("; ")}`);
-  for (const command of ["fast", "permission-system", "auto-review-policy-audit"]) if (!names.includes(command)) throw new Error(`Command did not load: ${command}`);
+  for (const command of ["pi-footer", "permission-system", "auto-review-policy-audit"]) if (!names.includes(command)) throw new Error(`Command did not load: ${command}`);
   if (agentRuns) throw new Error("Startup unexpectedly triggered a model run.");
   console.log(JSON.stringify({ ok: true, platform: process.platform, arch: process.arch, piVersion: info.piVersion,
     model: `${settings.defaultProvider}/${settings.defaultModel}`, needsLogin: !state.model || state.model.provider === "unknown", requiredChildProtections: true,
-    permissionReview: true, extensionErrors: 0, filesVerified: verified, modelRuns: agentRuns,
+    permissionReview: true, extensionErrors: 0, modelRuns: agentRuns,
     login: "Run pi-thagoras /login openai if this is a new machine." }, null, 2));
 } finally {
   clearTimeout(deadline); child.kill();

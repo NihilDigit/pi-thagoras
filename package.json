@@ -2,7 +2,7 @@
   "name": "pi-thagoras",
   "private": true,
   "version": "0.1.0",
-  "engines": { "node": ">=24.19.0 <25" },
+  "engines": { "node": ">=24.19.0" },
   "scripts": {
     "build:windows": "node scripts/build-windows.mjs",
     "test:setup": "node --test tests/portable-profile.test.mjs",
@@ -11,7 +11,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/compact-warning.ts",
+      "./extensions/pi-topbar.ts",
       "./extensions/pi-footer.ts"
     ],
     "skills": [

@@ -2,7 +2,7 @@
 
 ## 环境要求与安装
 
-先安装 PowerShell 7、Git、Node.js 24.19+（24.x）和 Python 3.11+。使用 Git 递归克隆，不能用缺少子模块的源码 ZIP 替代：
+先安装 PowerShell 7、Git、Node.js 24.19+ 和 Python 3.11+。使用 Git 递归克隆，不能用缺少子模块的源码 ZIP 替代：
 
 ~~~powershell
 git clone --recurse-submodules https://github.com/NihilDigit/pi-thagoras.git
@@ -41,6 +41,6 @@ git submodule update --init --recursive
 .\setup.ps1 -Apply
 ~~~
 
-根提交变化时会重新构建；修改未提交源码进行开发后，使用 `node scripts/build-windows.mjs` 显式重建。
+已安装过一次的机器运行 `.\setup.ps1 -Apply` 会直接将当前仓库的 `agents/`、`extensions/`、`guards/`、`config/`、`skills/` 与 `APPEND_SYSTEM.md` 热同步到已安装的运行目录和 `~/.pi/agent`，在 Pi 中执行 `/reload` 即可生效。若升级了 `setup/runtime/package-lock.json` 或 `pi-subagents` 子模块，传入 `.\setup.ps1 -Apply -Rebuild` 重新全量构建。
 
 旧代码 release 和配置备份会保留，不自动清理。需要恢复时，按 `.pi-thagoras-backups` 下的 `manifest.json` 恢复列出的配置文件，保留后来新增的设置与登录；不要整目录覆盖 Agent 目录。
