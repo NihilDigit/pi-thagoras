@@ -1,23 +1,70 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerRecoveryGuard } from "../extensions/recovery-guard.ts";
 import { installedPackageRoot } from "./installed-paths.mjs";
 
-function installVirtualModulesHook() {
+async function ensureHostVmShims(): Promise<Map<string, string> | undefined> {
+  const entry = process.argv[1];
+  if (entry && entry.endsWith("cli.js")) {
+    const chunksDir = join(dirname(entry), "chunks");
+    if (existsSync(chunksDir)) {
+      const vmFile = readdirSync(chunksDir).find((f) => /^virtual-modules-.*\.js$/i.test(f));
+      if (vmFile) {
+        const vmChunkPath = join(chunksDir, vmFile);
+        const cacheDir = join(tmpdir(), `pi-thagoras-vm-${vmFile.replace(/\.js$/i, "")}`);
+        const manifestPath = join(cacheDir, "manifest.json");
+        if (!existsSync(manifestPath)) {
+          mkdirSync(cacheDir, { recursive: true });
+          const { VIRTUAL_MODULES } = await import(pathToFileURL(vmChunkPath).href);
+          const vmUrl = pathToFileURL(vmChunkPath).href;
+          const manifest: Record<string, string> = {};
+          for (const [spec, modObj] of Object.entries(VIRTUAL_MODULES as Record<string, Record<string, unknown>>)) {
+            const fileName = spec.replace(/[^a-zA-Z0-9_-]/g, "_") + ".mjs";
+            const keys = Object.keys(modObj).filter(
+              (k) => k !== "default" && /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k),
+            );
+            const lines = [
+              `import { VIRTUAL_MODULES } from ${JSON.stringify(vmUrl)};`,
+              `const m = VIRTUAL_MODULES[${JSON.stringify(spec)}];`,
+              ...keys.map((k) => `export const ${k} = m.${k};`),
+              ...("default" in modObj ? ["export default m.default;"] : []),
+              "",
+            ];
+            writeFileSync(join(cacheDir, fileName), lines.join("\n"), "utf8");
+            manifest[spec] = fileName;
+          }
+          writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+        }
+        const raw = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, string>;
+        const urlMap = new Map<string, string>();
+        for (const [spec, fileName] of Object.entries(raw)) {
+          urlMap.set(spec, pathToFileURL(join(cacheDir, fileName)).href);
+        }
+        return urlMap;
+      }
+    }
+  }
+  const shimsDir = join(dirname(fileURLToPath(import.meta.url)), "vm-shims");
+  const manifestPath = join(shimsDir, "manifest.json");
+  if (!existsSync(manifestPath)) return undefined;
+  const raw = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, string>;
+  const urlMap = new Map<string, string>();
+  for (const [spec, fileName] of Object.entries(raw)) {
+    urlMap.set(spec, pathToFileURL(join(shimsDir, fileName)).href);
+  }
+  return urlMap;
+}
+
+async function installVirtualModulesHook() {
   const g = globalThis as Record<string, unknown>;
   if (g.__piThagorasVmHookInstalled || typeof registerHooks !== "function") return;
   try {
-    const shimsDir = join(dirname(fileURLToPath(import.meta.url)), "vm-shims");
-    const manifestPath = join(shimsDir, "manifest.json");
-    if (!existsSync(manifestPath)) return;
-    const raw = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, string>;
-    const urlMap = new Map<string, string>();
-    for (const [spec, fileName] of Object.entries(raw)) {
-      urlMap.set(spec, pathToFileURL(join(shimsDir, fileName)).href);
-    }
+    const urlMap = await ensureHostVmShims();
+    if (!urlMap) return;
     registerHooks({
       resolve(specifier, context, nextResolve) {
         const hit = urlMap.get(specifier);
@@ -31,7 +78,7 @@ function installVirtualModulesHook() {
   }
 }
 
-installVirtualModulesHook();
+await installVirtualModulesHook();
 
 export interface RecoveryHostPaths {
   guard: string;

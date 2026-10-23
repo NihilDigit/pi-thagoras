@@ -4,8 +4,10 @@ param(
     [string]$AgentRoot = $(if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $env:USERPROFILE '.pi\agent' })
 )
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
-$OutputEncoding = [Text.Encoding]::UTF8
+$utf8NoBom = [Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8NoBom
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
 $repo = Split-Path $PSScriptRoot -Parent
 $agent = [IO.Path]::GetFullPath($AgentRoot)
 
@@ -30,15 +32,21 @@ if (Test-Path -LiteralPath $appendPath) {
     } else {
         $updated = ($current.TrimEnd() + "`n`n" + $block + "`n").TrimStart()
     }
-    Set-Content -LiteralPath $appendPath -Value $updated -NoNewline -Encoding utf8
+    [IO.File]::WriteAllText($appendPath, $updated, $utf8NoBom)
 } else {
-    Set-Content -LiteralPath $appendPath -Value ($block + "`n") -NoNewline -Encoding utf8
+    [IO.File]::WriteAllText($appendPath, ($block + "`n"), $utf8NoBom)
 }
 Copy-Item -LiteralPath (Join-Path $repo 'models.json') -Destination (Join-Path $agent 'models.json') -Force
 New-Item -ItemType Directory -Path (Join-Path $agent 'extensions\pi-permission-system') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'config\permissions.json') -Destination (Join-Path $agent 'extensions\pi-permission-system\config.json') -Force
 New-Item -ItemType Directory -Path (Join-Path $agent 'extensions\subagent') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'config\subagent.json') -Destination (Join-Path $agent 'extensions\subagent\config.json') -Force
+
+$userAgentsDir = Join-Path $agent 'agents'
+New-Item -ItemType Directory -Path $userAgentsDir -Force | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $repo 'agents') -Filter '*.md' | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $userAgentsDir $_.Name) -Force
+}
 
 $infoPath = Join-Path $agent 'pi-thagoras.json'
 if (-not (Test-Path -LiteralPath $infoPath)) {
@@ -54,14 +62,33 @@ if (-not (Test-Path -LiteralPath $appDest)) {
 $piCli = $info.piCli
 $recoveryState = $info.recoveryState
 $psQuote = { param($v) "'" + $v.Replace("'", "''") + "'" }
-$psLauncher = "`$env:PI_CODING_AGENT_DIR=$(&$psQuote $agent)`n`$env:PI_MANAGED_INSTALL_ROOT=$(&$psQuote $releaseRoot)`n`$env:PI_THAGORAS_RECOVERY_STATE=$(&$psQuote $recoveryState)`n& node $(&$psQuote $piCli) @args`nexit `$LASTEXITCODE`n"
-$cmdLauncher = "@echo off`r`nset `"PI_CODING_AGENT_DIR=$agent`"`r`nset `"PI_MANAGED_INSTALL_ROOT=$releaseRoot`"`r`nset `"PI_THAGORAS_RECOVERY_STATE=$recoveryState`"`r`nnode `"$piCli`" %*`r`n"
+$psLauncher = @"
+chcp.com 65001 >`$null
+[Console]::InputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new(`$false)
+`$env:PI_CODING_AGENT_DIR=$(&$psQuote $agent)
+`$env:PI_THAGORAS_RECOVERY_STATE=$(&$psQuote $recoveryState)
+`$installRoot = Join-Path `$env:PI_CODING_AGENT_DIR 'install'
+`$verFile = Join-Path `$installRoot 'current-version'
+if (Test-Path -LiteralPath `$verFile) {
+  `$ver = (Get-Content -LiteralPath `$verFile -Raw).Trim()
+  `$managedCli = Join-Path `$installRoot "releases\`$ver\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js"
+  if (Test-Path -LiteralPath `$managedCli) {
+    `$env:PI_MANAGED_INSTALL_ROOT = `$installRoot
+    & node `$managedCli @args
+    exit `$LASTEXITCODE
+  }
+}
+`$env:PI_MANAGED_INSTALL_ROOT=$(&$psQuote $releaseRoot)
+& node $(&$psQuote $piCli) @args
+exit `$LASTEXITCODE
+"@.Replace("`r`n", "`n")
+$cmdLauncher = "@echo off`r`nchcp 65001 >nul`r`nset `"PI_CODING_AGENT_DIR=$agent`"`r`nset `"PI_THAGORAS_RECOVERY_STATE=$recoveryState`"`r`nif exist `"%PI_CODING_AGENT_DIR%\install\current-version`" (`r`n  set /p PI_CUR_VER=<`"%PI_CODING_AGENT_DIR%\install\current-version`"`r`n  set `"PI_MANAGED_INSTALL_ROOT=%PI_CODING_AGENT_DIR%\install`"`r`n  call node `"%PI_CODING_AGENT_DIR%\install\releases\%%PI_CUR_VER%%\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js`" %*`r`n  exit /b %ERRORLEVEL%`r`n)`r`nset `"PI_MANAGED_INSTALL_ROOT=$releaseRoot`"`r`nnode `"$piCli`" %*`r`n"
 $binDir = Join-Path $agent 'bin'
 New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-[IO.File]::WriteAllText((Join-Path $binDir 'pi-thagoras.ps1'), $psLauncher, [Text.Encoding]::UTF8)
-[IO.File]::WriteAllText((Join-Path $binDir 'pi-thagoras.cmd'), $cmdLauncher, [Text.Encoding]::UTF8)
-[IO.File]::WriteAllText((Join-Path $binDir 'pi.ps1'), $psLauncher, [Text.Encoding]::UTF8)
-[IO.File]::WriteAllText((Join-Path $binDir 'pi.cmd'), $cmdLauncher, [Text.Encoding]::UTF8)
+[IO.File]::WriteAllText((Join-Path $binDir 'pi-thagoras.ps1'), $psLauncher, $utf8NoBom)
+[IO.File]::WriteAllText((Join-Path $binDir 'pi-thagoras.cmd'), $cmdLauncher, $utf8NoBom)
+[IO.File]::WriteAllText((Join-Path $binDir 'pi.ps1'), $psLauncher, $utf8NoBom)
+[IO.File]::WriteAllText((Join-Path $binDir 'pi.cmd'), $cmdLauncher, $utf8NoBom)
 
 $nodeExe = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $tempDir = Join-Path ([IO.Path]::GetTempPath()) "pi-thagoras-sync-$PID"
@@ -75,7 +102,7 @@ try {
         pi      = $rootPkg.pi
     } | ConvertTo-Json -Depth 10
     $tempPkgPath = Join-Path $tempDir 'app-package.json'
-    [IO.File]::WriteAllText($tempPkgPath, $appPkg + "`n", [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($tempPkgPath, $appPkg + "`n", $utf8NoBom)
 
     $optimizeScript = Join-Path $repo 'scripts\optimize-installed-release.mjs'
     $tempScript = Join-Path $tempDir 'elevated-sync.ps1'
@@ -112,7 +139,7 @@ if (`$LASTEXITCODE -ne 0) {
     throw "optimize-installed-release failed (`$LASTEXITCODE)"
 }
 "@
-    [IO.File]::WriteAllText($tempScript, $syncBody, [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($tempScript, $syncBody, $utf8NoBom)
 
     Write-Host "2. Syncing repo & optimizing bundles in $releaseRoot (UAC)..." -ForegroundColor Cyan
     $proc = Start-Process -FilePath (Get-Command pwsh).Source -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $tempScript)

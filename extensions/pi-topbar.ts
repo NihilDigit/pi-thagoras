@@ -1,10 +1,89 @@
-import { spawnSync } from "node:child_process";
+import { ChildProcess, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { GIT_ICON, gitBranchFromPorcelain, gitSummary } from "./pi-footer/core.ts";
 import { formatGitStatus, row } from "./pi-footer/layout.ts";
+
+let lastSelectedText = "";
+
+function installWin32ClipUtf16Hook() {
+	if (process.platform !== "win32") return;
+	const g = globalThis as Record<string, unknown>;
+	if (g.__piThagorasClipUtf16Hooked) return;
+	const origSpawn = ChildProcess.prototype.spawn;
+	ChildProcess.prototype.spawn = function (options: any) {
+		const res = origSpawn.call(this, options);
+		const file = String(options?.file ?? "");
+		if (/(?:^|[\\/])clip(?:\.exe)?$/i.test(file) && this.stdin) {
+			const origEnd = this.stdin.end.bind(this.stdin);
+			(this.stdin as any).end = (chunk: any, ...rest: any[]) => {
+				if (typeof chunk === "string") {
+					lastSelectedText = chunk;
+					return origEnd(Buffer.from(chunk, "utf16le"), ...rest);
+				}
+				if (Buffer.isBuffer(chunk) && !(chunk.length >= 2 && chunk[0] === 0xff && chunk[1] === 0xfe)) {
+					const str = chunk.toString("utf8");
+					lastSelectedText = str;
+					return origEnd(Buffer.from(str, "utf16le"), ...rest);
+				}
+				return origEnd(chunk, ...rest);
+			};
+		}
+		return res;
+	};
+	g.__piThagorasClipUtf16Hooked = true;
+}
+
+installWin32ClipUtf16Hook();
+
+function unwrapInteractiveTui(tui: any): any {
+	if (!tui || typeof tui !== "object") return tui;
+	try {
+		Object.defineProperty(Object.prototype, "__piThagorasUnwrapSelf", {
+			get() {
+				return this;
+			},
+			configurable: true,
+		});
+		const real = tui.__piThagorasUnwrapSelf;
+		delete (Object.prototype as any).__piThagorasUnwrapSelf;
+		return real ?? tui;
+	} catch {
+		delete (Object.prototype as any).__piThagorasUnwrapSelf;
+		return tui;
+	}
+}
+
+function appendQuoteToEditor(editor: any, rawText: string) {
+	const cleaned = rawText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimEnd();
+	if (!cleaned) return;
+	const quoted = cleaned
+		.split("\n")
+		.map((line) => `> ${line}`)
+		.join("\n");
+	const current = typeof editor.getText === "function" ? String(editor.getText()) : "";
+	if (!current.trim()) {
+		if (current.length > 0 && typeof editor.setText === "function") {
+			editor.setText("");
+		}
+		editor.insertTextAtCursor(`${quoted}\n`);
+		return;
+	}
+	const lines = editor.state?.lines;
+	if (Array.isArray(lines) && lines.length > 0) {
+		editor.state.cursorLine = lines.length - 1;
+		const lastLen = lines[lines.length - 1]?.length ?? 0;
+		if (typeof editor.setCursorCol === "function") {
+			editor.setCursorCol(lastLen);
+		} else {
+			editor.state.cursorCol = lastLen;
+		}
+	}
+	const sep = current.endsWith("\n\n") ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+	editor.insertTextAtCursor(`${sep}${quoted}\n`);
+}
 
 export const COMPACT_THRESHOLD_TOKENS = 512_000;
 export const MAX_LINE_CHARS = 2_000;
@@ -157,6 +236,11 @@ class TopRightStatusEditor extends CustomEditor {
 	}
 
 	override handleInput(data: string): void {
+		if (matchesKey(data, "alt+q") && lastSelectedText) {
+			appendQuoteToEditor(this, lastSelectedText);
+			this.tui.requestRender();
+			return;
+		}
 		if (this.onSubagentNav(data, this.getText() === "")) {
 			return;
 		}
@@ -999,7 +1083,7 @@ export default function (pi: ExtensionAPI) {
 		});
 		ctx.ui.setEditorComponent((tui, theme, kb, options) => {
 			requestRender = () => tui.requestRender();
-			return new TopRightStatusEditor(
+			const editor = new TopRightStatusEditor(
 				tui,
 				theme,
 				kb,
@@ -1015,6 +1099,49 @@ export default function (pi: ExtensionAPI) {
 				handleDrawerKey,
 				options,
 			);
+			const realTui = unwrapInteractiveTui(tui);
+			if (realTui && typeof realTui === "object") {
+				let altSelectQuote = false;
+				if (!realTui.__piThagorasMouseHooked && typeof realTui.handleSelectionMouseEvent === "function") {
+					const origHandleMouse = realTui.handleSelectionMouseEvent.bind(realTui);
+					realTui.handleSelectionMouseEvent = (event: any) => {
+						const btn = Number(event?.button ?? 0);
+						const isModifierQuote = (btn & 8) !== 0 || (btn & 16) !== 0;
+						if (!event?.release && (btn & 32) === 0) {
+							altSelectQuote = isModifierQuote;
+						} else if (isModifierQuote) {
+							altSelectQuote = true;
+						}
+						return origHandleMouse(event);
+					};
+					realTui.__piThagorasMouseHooked = true;
+				}
+				realTui.copySelection = async (text: string) => {
+					const shouldQuote = altSelectQuote;
+					altSelectQuote = false;
+					lastSelectedText = text;
+					if (shouldQuote) {
+						appendQuoteToEditor(editor, text);
+						realTui.clearTextSelection?.();
+						realTui.requestRender?.();
+						return true;
+					}
+					if (process.platform === "win32") {
+						try {
+							const res = spawnSync("clip", [], {
+								input: Buffer.from(text, "utf16le"),
+								timeout: 5000,
+								windowsHide: true,
+							});
+							return res.status === 0;
+						} catch (error) {
+							return error instanceof Error ? error.message : String(error);
+						}
+					}
+					return false;
+				};
+			}
+			return editor;
 		});
 	});
 

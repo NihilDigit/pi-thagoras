@@ -110,6 +110,20 @@ export function patchSubagentsFiles(subagentsRoot) {
     );
     writeFileSync(tdPath, td, "utf8");
   }
+
+  const execPath = join(subagentsRoot, "src", "runs", "foreground", "subagent-executor.js");
+  if (existsSync(execPath)) {
+    const execOrigPath = execPath + ".orig";
+    if (!existsSync(execOrigPath)) {
+      copyFileSync(execPath, execOrigPath);
+    }
+    let execSrc = readFileSync(execOrigPath, "utf8").replace(/\r\n/g, "\n");
+    execSrc = execSrc.replace(
+      '            if (action === "stop") {\n                const targetRunId = paramsWithResolvedCwd.runId ?? paramsWithResolvedCwd.id;',
+      '            if (action === "stop" || action === "cancel" || action === "kill" || action === "abort") {\n                const targetRunId = paramsWithResolvedCwd.runId ?? paramsWithResolvedCwd.id ?? getAsyncInterruptTarget(deps.state, undefined, undefined, { fallbackToNewest: true })?.asyncId;',
+    );
+    writeFileSync(execPath, execSrc, "utf8");
+  }
 }
 
 function bundleWithBun(entryPath, outPath, extraExternals = []) {
@@ -149,10 +163,40 @@ function bundleTsExtensionInPlace(pkgDir, entryRel, bundleRel, reexportTarget) {
   );
 }
 
+export function patchWin32Clipboard(releaseRoot) {
+  const chunksDir = join(
+    releaseRoot,
+    "node_modules",
+    "@earendil-works",
+    "pi-coding-agent",
+    "dist",
+    "bundle",
+    "chunks",
+  );
+  if (!existsSync(chunksDir)) return;
+  for (const file of readdirSync(chunksDir)) {
+    if (!file.endsWith(".js")) continue;
+    const fullPath = join(chunksDir, file);
+    const content = readFileSync(fullPath, "utf8");
+    const target = "child.stdin?.end(options?.input)";
+    const replacement =
+      'child.stdin?.end(command==="clip"&&typeof options?.input=="string"?Buffer.from(options.input,"utf16le"):options?.input)';
+    if (content.includes(target) && !content.includes(replacement)) {
+      writeFileSync(fullPath, content.replaceAll(target, replacement), "utf8");
+    }
+  }
+}
+
 export async function optimizeRelease(releaseRoot) {
   const modules = join(releaseRoot, "node_modules");
   const app = join(releaseRoot, "app");
+  const appPkgPath = join(app, "package.json");
+  if (existsSync(appPkgPath)) {
+    const cleanPkg = readFileSync(appPkgPath, "utf8").replace(/^\uFEFF/, "");
+    writeFileSync(appPkgPath, cleanPkg, "utf8");
+  }
 
+  patchWin32Clipboard(releaseRoot);
   await generateVmShims(releaseRoot, join(app, "guards", "vm-shims"));
 
   const subagentsRoot = join(modules, "pi-subagents");

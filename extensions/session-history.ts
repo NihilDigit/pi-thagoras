@@ -791,6 +791,15 @@ export default function registerSessionHistoryExtension(pi: ExtensionAPI) {
 	pi.on("session_compact", () => resetReadStreak());
 
 	pi.on("tool_call", (event, ctx) => {
+		if (event.toolName === "subagent") {
+			const subInput = event.input as Record<string, unknown> | undefined;
+			if (subInput && typeof subInput.action === "string") {
+				const act = subInput.action.trim().toLowerCase();
+				if (act === "cancel" || act === "kill" || act === "abort") {
+					subInput.action = "stop";
+				}
+			}
+		}
 		if (event.toolName !== "read") {
 			resetReadStreak();
 			return;
