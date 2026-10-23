@@ -1,9 +1,37 @@
-import { createRequire } from "node:module";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire, registerHooks } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerRecoveryGuard } from "../extensions/recovery-guard.ts";
 import { installedPackageRoot } from "./installed-paths.mjs";
+
+function installVirtualModulesHook() {
+  const g = globalThis as Record<string, unknown>;
+  if (g.__piThagorasVmHookInstalled || typeof registerHooks !== "function") return;
+  try {
+    const shimsDir = join(dirname(fileURLToPath(import.meta.url)), "vm-shims");
+    const manifestPath = join(shimsDir, "manifest.json");
+    if (!existsSync(manifestPath)) return;
+    const raw = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, string>;
+    const urlMap = new Map<string, string>();
+    for (const [spec, fileName] of Object.entries(raw)) {
+      urlMap.set(spec, pathToFileURL(join(shimsDir, fileName)).href);
+    }
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        const hit = urlMap.get(specifier);
+        if (hit) return { url: hit, shortCircuit: true };
+        return nextResolve(specifier, context);
+      },
+    });
+    g.__piThagorasVmHookInstalled = true;
+  } catch {
+    // Non-fatal fallback
+  }
+}
+
+installVirtualModulesHook();
 
 export interface RecoveryHostPaths {
   guard: string;

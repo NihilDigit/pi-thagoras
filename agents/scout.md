@@ -3,7 +3,7 @@ name: scout
 description: 快速只读源码探索与事实收集
 model: cliproxyapi/gemini-3.8-flash-high
 thinking: medium
-tools: read, grep, find, ls
+tools: read, grep, find, ls, session_history
 systemPromptMode: replace
 inheritProjectContext: true
 inheritGlobalContext: true

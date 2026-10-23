@@ -3,7 +3,7 @@ name: reviewer
 description: 架构设计互审、边界推演与代码审查
 model: openai/gpt-6-astra
 thinking: medium
-tools: read, grep, find, ls
+tools: read, grep, find, ls, session_history
 systemPromptMode: replace
 inheritProjectContext: true
 inheritGlobalContext: true

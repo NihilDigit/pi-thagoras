@@ -51,44 +51,19 @@ if (-not (Test-Path -LiteralPath $appDest)) {
     throw "Release directory not found ($appDest). Run: pwsh -NoProfile -File ./setup.ps1 -Apply -Rebuild"
 }
 
-$swPatchOld1 = @'
-function runsAllCall(children) {
-    return `await runs.all([${children.map((child) => `{ key: ${JSON.stringify(child.key)}, agent: ${JSON.stringify(child.agent)}, task: ${child.taskExpression} }`).join(", ")}])`;
-}
-'@.Replace("`r`n", "`n")
-$swPatchNew1 = @'
-function runsAllCall(children) {
-    return `await runs.all([${children.map((child) => `{ key: ${JSON.stringify(child.key)}, agent: ${JSON.stringify(child.agent)}${child.model ? `, model: ${JSON.stringify(child.model)}` : ""}${child.worktree !== undefined ? `, worktree: ${JSON.stringify(child.worktree)}` : ""}${child.cwd ? `, cwd: ${JSON.stringify(child.cwd)}` : ""}, task: ${child.taskExpression} }`).join(", ")}])`;
-}
-'@.Replace("`r`n", "`n")
-$swPatchOld2 = @'
-        const record = exactFields(item, path, ["agent", "task"], "Each tasks item accepts only agent and task.");
-        const agent = nonEmptyString(record.agent, `${path}.agent`);
-        const task = nonEmptyString(record.task, `${path}.task`);
-        const taskExpression = compileTemplate(task, {
-            path: `${path}.task`,
-            hasOriginalTask: originalTask !== undefined,
-            previous: { unavailable: "tasks items may only use {task}." },
-            outputsUnavailable: "tasks items may only use {task}.",
-        });
-        return { key: `task-${index + 1}`, agent, taskExpression };
-'@.Replace("`r`n", "`n")
-$swPatchNew2 = @'
-        const record = exactFields(item, path, ["agent", "task", "model", "worktree", "cwd"], "Each tasks item accepts agent, task, model, worktree and cwd.");
-        const agent = nonEmptyString(record.agent, `${path}.agent`);
-        const task = nonEmptyString(record.task, `${path}.task`);
-        const model = record.model === undefined ? undefined : nonEmptyString(record.model, `${path}.model`);
-        const worktree = typeof record.worktree === "boolean" ? record.worktree : undefined;
-        const cwd = record.cwd === undefined ? undefined : nonEmptyString(record.cwd, `${path}.cwd`);
-        const taskExpression = compileTemplate(task, {
-            path: `${path}.task`,
-            hasOriginalTask: originalTask !== undefined,
-            previous: { unavailable: "tasks items may only use {task}." },
-            outputsUnavailable: "tasks items may only use {task}.",
-        });
-        return { key: `task-${index + 1}`, agent, model, worktree, cwd, taskExpression };
-'@.Replace("`r`n", "`n")
+$piCli = $info.piCli
+$recoveryState = $info.recoveryState
+$psQuote = { param($v) "'" + $v.Replace("'", "''") + "'" }
+$psLauncher = "`$env:PI_CODING_AGENT_DIR=$(&$psQuote $agent)`n`$env:PI_MANAGED_INSTALL_ROOT=$(&$psQuote $releaseRoot)`n`$env:PI_THAGORAS_RECOVERY_STATE=$(&$psQuote $recoveryState)`n& node $(&$psQuote $piCli) @args`nexit `$LASTEXITCODE`n"
+$cmdLauncher = "@echo off`r`nset `"PI_CODING_AGENT_DIR=$agent`"`r`nset `"PI_MANAGED_INSTALL_ROOT=$releaseRoot`"`r`nset `"PI_THAGORAS_RECOVERY_STATE=$recoveryState`"`r`nnode `"$piCli`" %*`r`n"
+$binDir = Join-Path $agent 'bin'
+New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $binDir 'pi-thagoras.ps1'), $psLauncher, [Text.Encoding]::UTF8)
+[IO.File]::WriteAllText((Join-Path $binDir 'pi-thagoras.cmd'), $cmdLauncher, [Text.Encoding]::UTF8)
+[IO.File]::WriteAllText((Join-Path $binDir 'pi.ps1'), $psLauncher, [Text.Encoding]::UTF8)
+[IO.File]::WriteAllText((Join-Path $binDir 'pi.cmd'), $cmdLauncher, [Text.Encoding]::UTF8)
 
+$nodeExe = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $tempDir = Join-Path ([IO.Path]::GetTempPath()) "pi-thagoras-sync-$PID"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 try {
@@ -102,15 +77,7 @@ try {
     $tempPkgPath = Join-Path $tempDir 'app-package.json'
     [IO.File]::WriteAllText($tempPkgPath, $appPkg + "`n", [Text.Encoding]::UTF8)
 
-    $swPath = Join-Path $releaseRoot 'node_modules\pi-subagents\src\workflows\structured-workflow-scripts.js'
-    $tempSwPath = ''
-    if (Test-Path -LiteralPath $swPath) {
-        $swRaw = (Get-Content -LiteralPath $swPath -Raw).Replace("`r`n", "`n")
-        $swRaw = $swRaw.Replace($swPatchOld1, $swPatchNew1).Replace($swPatchOld2, $swPatchNew2)
-        $tempSwPath = Join-Path $tempDir 'structured-workflow-scripts.js'
-        [IO.File]::WriteAllText($tempSwPath, $swRaw, [Text.Encoding]::UTF8)
-    }
-
+    $optimizeScript = Join-Path $repo 'scripts\optimize-installed-release.mjs'
     $tempScript = Join-Path $tempDir 'elevated-sync.ps1'
     $syncBody = @"
 `$ErrorActionPreference = 'Stop'
@@ -140,13 +107,14 @@ if ((Test-Path -LiteralPath `$permSrc) -and (Test-Path -LiteralPath `$permDest))
     Remove-Item -LiteralPath `$permDest -Recurse -Force
     Copy-Item -LiteralPath `$permSrc -Destination `$permDest -Recurse -Force
 }
-if ('$($tempSwPath.Replace("'", "''"))' -and (Test-Path -LiteralPath '$($tempSwPath.Replace("'", "''"))')) {
-    Copy-Item -LiteralPath '$($tempSwPath.Replace("'", "''"))' -Destination (Join-Path `$releaseRoot 'node_modules\pi-subagents\src\workflows\structured-workflow-scripts.js') -Force
+& '$($nodeExe.Replace("'", "''"))' '$($optimizeScript.Replace("'", "''"))' `$releaseRoot
+if (`$LASTEXITCODE -ne 0) {
+    throw "optimize-installed-release failed (`$LASTEXITCODE)"
 }
 "@
     [IO.File]::WriteAllText($tempScript, $syncBody, [Text.Encoding]::UTF8)
 
-    Write-Host "2. Syncing repo to $releaseRoot (UAC)..." -ForegroundColor Cyan
+    Write-Host "2. Syncing repo & optimizing bundles in $releaseRoot (UAC)..." -ForegroundColor Cyan
     $proc = Start-Process -FilePath (Get-Command pwsh).Source -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $tempScript)
     if ($proc.ExitCode -ne 0) {
         throw "Sync to $releaseRoot failed (ExitCode: $($proc.ExitCode))"
@@ -155,4 +123,4 @@ if ('$($tempSwPath.Replace("'", "''"))' -and (Test-Path -LiteralPath '$($tempSwP
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "Synced to $releaseRoot. Run /reload in Pi to apply." -ForegroundColor Green
+Write-Host "Synced and optimized $releaseRoot. Run /reload or restart Pi to apply." -ForegroundColor Green

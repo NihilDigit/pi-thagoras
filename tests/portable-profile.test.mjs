@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planProfile, applyProfile } from "../scripts/lib/profile.mjs";
+import { patchSubagentsFiles } from "../scripts/lib/optimize-release.mjs";
 import { installedPackageRoot } from "../guards/installed-paths.mjs";
 
 function fixture() {
@@ -78,4 +79,40 @@ test("private runtime data cannot be placed in a source checkout or installed re
   const f = fixture();
   assert.throws(() => planProfile({ ...f.options, runtimeRoot: join(f.options.releaseRoot, "state") }), /must stay outside/);
   assert.throws(() => planProfile({ ...f.options, checkoutRoot: f.directory }), /must stay outside/);
+});
+
+test("patchSubagentsFiles enables model/worktree/cwd in parallel tasks and updates delegation guidance", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-subagents-patch-"));
+  mkdirSync(join(dir, "src/workflows"), { recursive: true });
+  mkdirSync(join(dir, "src/extension"), { recursive: true });
+  const swSample = [
+    "function runsAllCall(children) {",
+    '    return `await runs.all([${children.map((child) => `{ key: ${JSON.stringify(child.key)}, agent: ${JSON.stringify(child.agent)}, task: ${child.taskExpression} }`).join(", ")}])`;',
+    "}",
+    "export function sample(item, path, index, originalTask) {",
+    '        const record = exactFields(item, path, ["agent", "task"], "Each tasks item accepts only agent and task.");',
+    "        const agent = nonEmptyString(record.agent, `${path}.agent`);",
+    "        const task = nonEmptyString(record.task, `${path}.task`);",
+    "        const taskExpression = compileTemplate(task, {",
+    "            path: `${path}.task`,",
+    "            hasOriginalTask: originalTask !== undefined,",
+    '            previous: { unavailable: "tasks items may only use {task}." },',
+    '            outputsUnavailable: "tasks items may only use {task}.",',
+    "        });",
+    "        return { key: `task-${index + 1}`, agent, taskExpression };",
+    "}",
+  ].join("\n");
+  const tdSample = [
+    "export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:",
+    "- Delegate only when the operator asked, directly or through applicable user/project instructions; size, complexity or risk alone is not authorization.",
+    "- Native async completion wakes this session: return control; do not sleep, poll or call bg_wait for it.`;",
+  ].join("\n");
+  writeFileSync(join(dir, "src/workflows/structured-workflow-scripts.js"), swSample);
+  writeFileSync(join(dir, "src/extension/tool-description.js"), tdSample);
+  patchSubagentsFiles(dir);
+  const swPatched = readFileSync(join(dir, "src/workflows/structured-workflow-scripts.js"), "utf8");
+  const tdPatched = readFileSync(join(dir, "src/extension/tool-description.js"), "utf8");
+  assert.match(swPatched, /\["agent", "task", "model", "worktree", "cwd"\]/);
+  assert.match(swPatched, /child\.model \?/);
+  assert.match(tdPatched, /Delegate proactively per project workflow instructions/);
 });

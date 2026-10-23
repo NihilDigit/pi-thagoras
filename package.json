@@ -12,7 +12,8 @@
   "pi": {
     "extensions": [
       "./extensions/pi-topbar.ts",
-      "./extensions/pi-footer.ts"
+      "./extensions/pi-footer.ts",
+      "./extensions/session-history.ts"
     ],
     "skills": [
       "./skills"

@@ -3,7 +3,7 @@ name: lead
 description: 领域分包负责人，统筹子领域重构、实现与内部子代理调度
 model: openai/gpt-6-astra
 thinking: medium
-tools: read, grep, find, ls, bash, edit, write, subagent, subagent_supervisor, bg_wait, contact_supervisor
+tools: read, grep, find, ls, bash, edit, write, session_history, subagent, subagent_supervisor, bg_wait, contact_supervisor
 systemPromptMode: replace
 inheritProjectContext: true
 inheritGlobalContext: true
