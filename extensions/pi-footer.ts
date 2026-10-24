@@ -229,7 +229,7 @@ export default function (pi: ExtensionAPI) {
 		if (event.message.role !== "assistant") return;
 		const run = forContext(ctx);
 		if (!run) return;
-		const measured = run.metrics.finish(event.message);
+		const measured = run.metrics.finish(event.message, performance.now());
 		if (measured !== undefined && Number.isFinite(measured)) run.tps = measured;
 		run.requestRender();
 		void run.poller.request();

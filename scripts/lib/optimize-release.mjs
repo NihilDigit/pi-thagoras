@@ -196,6 +196,24 @@ export async function optimizeRelease(releaseRoot) {
     writeFileSync(appPkgPath, cleanPkg, "utf8");
   }
 
+  const tuiNativeSrc = join(modules, "@earendil-works", "pi-tui", "native");
+  const guardsNativeDest = join(app, "guards", "native");
+  if (existsSync(tuiNativeSrc)) {
+    mkdirSync(dirname(guardsNativeDest), { recursive: true });
+    for (const plat of readdirSync(tuiNativeSrc)) {
+      const prebuildsDir = join(tuiNativeSrc, plat, "prebuilds");
+      if (!existsSync(prebuildsDir)) continue;
+      for (const arch of readdirSync(prebuildsDir)) {
+        const archDir = join(prebuildsDir, arch);
+        const destArchDir = join(guardsNativeDest, plat, "prebuilds", arch);
+        mkdirSync(destArchDir, { recursive: true });
+        for (const f of readdirSync(archDir)) {
+          copyFileSync(join(archDir, f), join(destArchDir, f));
+        }
+      }
+    }
+  }
+
   patchWin32Clipboard(releaseRoot);
   await generateVmShims(releaseRoot, join(app, "guards", "vm-shims"));
 

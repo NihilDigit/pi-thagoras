@@ -212,17 +212,27 @@ export class OutputMetrics {
 			this.touch(now, e.type.includes("reasoning"));
 		}
 	}
-	finish(message: unknown): number | undefined {
+	finish(message: unknown, now?: number): number | undefined {
 		const m = object(message), usage = object(m?.usage);
 		if (!m || !["stop", "length", "toolUse"].includes(String(m.stopReason)) ||
 			!finite(usage?.output) || usage.output <= 0) return undefined;
+		const generatedTokens = Math.max(usage.output, finite(usage.reasoning) ? usage.reasoning : 0);
 		if (finite(m.durationMs) && m.durationMs >= 250) {
-			return usage.output / (m.durationMs / 1000);
+			return generatedTokens / (m.durationMs / 1000);
 		}
 		const hasReasoning = finite(usage.reasoning) && usage.reasoning > 0;
 		const streamSpanMs = this.first !== undefined && this.last !== undefined ? this.last - this.first : 0;
+		const end = this.last ?? now;
+		const requestSpanMs = this.requestStart !== undefined && end !== undefined && end >= this.requestStart
+			? end - this.requestStart : 0;
+		if (hasReasoning && requestSpanMs >= 250) {
+			return generatedTokens / (requestSpanMs / 1000);
+		}
 		if (streamSpanMs >= 250 && (!hasReasoning || this.reasoningObserved)) {
-			return usage.output / (streamSpanMs / 1000);
+			return generatedTokens / (streamSpanMs / 1000);
+		}
+		if (requestSpanMs >= 250) {
+			return generatedTokens / (requestSpanMs / 1000);
 		}
 		return undefined;
 	}

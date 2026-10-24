@@ -67,6 +67,9 @@ async function installVirtualModulesHook() {
     if (!urlMap) return;
     registerHooks({
       resolve(specifier, context, nextResolve) {
+        if (!Array.isArray(context?.conditions) || !context.conditions.includes("import")) {
+          return nextResolve(specifier, context);
+        }
         const hit = urlMap.get(specifier);
         if (hit) return { url: hit, shortCircuit: true };
         return nextResolve(specifier, context);

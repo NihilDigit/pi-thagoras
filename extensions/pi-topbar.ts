@@ -1,12 +1,123 @@
 import { ChildProcess, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CustomEditor, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { fileURLToPath } from "node:url";
+import { convertToPng, CustomEditor, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getNativeClipboard, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { GIT_ICON, gitBranchFromPorcelain, gitSummary } from "./pi-footer/core.ts";
 import { formatGitStatus, row } from "./pi-footer/layout.ts";
 
 let lastSelectedText = "";
+let cachedDirectNativeClipboard: any;
+
+function ensureNativeClipboardLoaded(): any {
+	if (cachedDirectNativeClipboard) return cachedDirectNativeClipboard;
+	try {
+		const cb = getNativeClipboard?.();
+		if (cb && typeof cb.getImage === "function") {
+			cachedDirectNativeClipboard = cb;
+			return cb;
+		}
+	} catch {
+		// fall through to direct load
+	}
+	if (process.platform === "win32") {
+		const req = createRequire(import.meta.url);
+		const here = dirname(fileURLToPath(import.meta.url));
+		const arch = process.arch;
+		const relSub = join("win32", "prebuilds", `win32-${arch}`, "win32-platform.node");
+		const candidates = [
+			join(here, "..", "..", "node_modules", "@earendil-works", "pi-tui", "native", relSub),
+			join(here, "..", "guards", "native", relSub),
+		];
+		for (const candidate of candidates) {
+			if (!existsSync(candidate)) continue;
+			try {
+				const loaded = req(candidate);
+				if (loaded && typeof loaded.getImage === "function") {
+					cachedDirectNativeClipboard = loaded;
+					return loaded;
+				}
+			} catch {
+				// try next
+			}
+		}
+	}
+	return undefined;
+}
+
+function detectImageExtension(bytes: Uint8Array): { ext?: string; needsPngConvert: boolean } {
+	if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+		return { ext: "png", needsPngConvert: false };
+	}
+	if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+		return { ext: "jpg", needsPngConvert: false };
+	}
+	if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+		return { ext: "gif", needsPngConvert: false };
+	}
+	if (
+		bytes.length >= 12 &&
+		bytes[0] === 0x52 &&
+		bytes[1] === 0x49 &&
+		bytes[2] === 0x46 &&
+		bytes[3] === 0x46 &&
+		bytes[8] === 0x57 &&
+		bytes[9] === 0x45 &&
+		bytes[10] === 0x42 &&
+		bytes[11] === 0x50
+	) {
+		return { ext: "webp", needsPngConvert: false };
+	}
+	return { ext: "png", needsPngConvert: true };
+}
+
+async function pasteClipboardIntoEditor(editor: any): Promise<boolean> {
+	const cb = ensureNativeClipboardLoaded();
+	if (!cb) return false;
+	try {
+		if (typeof cb.getFilePaths === "function") {
+			const paths: string[] | undefined = await cb.getFilePaths();
+			if (Array.isArray(paths) && paths.length > 0) {
+				editor.insertTextAtCursor(paths.join(" "));
+				editor.tui?.requestRender?.();
+				return true;
+			}
+		}
+		if (typeof cb.getImage === "function") {
+			const rawBytes: Uint8Array | undefined = await cb.getImage();
+			if (rawBytes && rawBytes.length > 0) {
+				const u8 = rawBytes instanceof Uint8Array ? rawBytes : new Uint8Array(rawBytes);
+				const { ext, needsPngConvert } = detectImageExtension(u8);
+				let outBytes: Uint8Array | null = u8;
+				if (needsPngConvert && typeof convertToPng === "function") {
+					outBytes = await convertToPng(u8);
+				}
+				if (outBytes && outBytes.length > 0) {
+					const filePath = join(tmpdir(), `pi-clipboard-${randomUUID()}.${ext || "png"}`);
+					writeFileSync(filePath, Buffer.from(outBytes));
+					editor.insertTextAtCursor(filePath);
+					editor.tui?.requestRender?.();
+					return true;
+				}
+			}
+		}
+		if (typeof cb.getText === "function") {
+			const text: string | undefined = await cb.getText();
+			if (text) {
+				editor.insertTextAtCursor(text);
+				editor.tui?.requestRender?.();
+				return true;
+			}
+		}
+	} catch {
+		// fall back to default handler
+	}
+	return false;
+}
 
 function installWin32ClipUtf16Hook() {
 	if (process.platform !== "win32") return;
@@ -212,6 +323,7 @@ interface TopRightState {
 	thinking: string;
 	subagentLabel: string;
 	reviewingLabel: string;
+	thinkingPhase: boolean;
 	spinnerFrame: string;
 	fg?: (color: string, text: string) => string;
 }
@@ -241,6 +353,14 @@ class TopRightStatusEditor extends CustomEditor {
 			this.tui.requestRender();
 			return;
 		}
+		if ((this as any).keybindings?.matches?.(data, "app.clipboard.pasteImage") || matchesKey(data, "alt+v")) {
+			void pasteClipboardIntoEditor(this).then((handled) => {
+				if (!handled) {
+					(this as any).onPasteImage?.();
+				}
+			});
+			return;
+		}
 		if (this.onSubagentNav(data, this.getText() === "")) {
 			return;
 		}
@@ -257,7 +377,7 @@ class TopRightStatusEditor extends CustomEditor {
 			(this as any).workingStatusIndicator = indicator;
 		}
 		if (width < 24) return base;
-		const { model, thinking, subagentLabel, reviewingLabel, spinnerFrame, fg: stateFg } = this.getState();
+		const { model, thinking, subagentLabel, reviewingLabel, thinkingPhase, spinnerFrame, fg: stateFg } = this.getState();
 		const fg = (color: string, text: string) => {
 			if (typeof stateFg === "function") return stateFg(color, text);
 			if (typeof this.editorTheme?.fg === "function") return this.editorTheme.fg(color, text);
@@ -267,15 +387,20 @@ class TopRightStatusEditor extends CustomEditor {
 			indicator && typeof indicator.renderInBorder === "function"
 				? String(indicator.renderInBorder(Math.max(12, Math.floor(width * 0.35)))).trim()
 				: "";
+		const indicatorSpinner =
+			indicator && typeof indicator.renderSpinnerInBorder === "function"
+				? String(indicator.renderSpinnerInBorder(4)).trim()
+				: "";
+		const activeSpinner = indicatorSpinner || fg("accent", spinnerFrame);
 		let leftStatus = "";
-		if (workingPart && reviewingLabel) {
-			leftStatus = `${workingPart} ${fg("dim", "│")} ${this.borderColor(reviewingLabel)}`;
+		if (reviewingLabel) {
+			leftStatus = `${activeSpinner} ${this.borderColor(reviewingLabel)}`;
 		} else if (workingPart) {
-			leftStatus = workingPart;
-		} else if (reviewingLabel) {
-			leftStatus = `${fg("accent", spinnerFrame)} ${this.borderColor(reviewingLabel)}`;
+			leftStatus = thinkingPhase
+				? `${activeSpinner} ${this.borderColor("Thinking")}`
+				: workingPart;
 		} else if (subagentLabel) {
-			leftStatus = `${fg("accent", spinnerFrame)} ${this.borderColor("Working")}`;
+			leftStatus = `${activeSpinner} ${this.borderColor("Working")}`;
 		}
 		const leftBrand = leftStatus
 			? `${leftStatus} `
@@ -383,6 +508,7 @@ export default function (pi: ExtensionAPI) {
 	let drawerOpen = false;
 	let selectedDrawerKey = "";
 	let reviewingActive = false;
+	let thinkingPhaseActive = false;
 	let spinnerIndex = 0;
 	let tickCount = 0;
 	let animTimer: ReturnType<typeof setInterval> | undefined;
@@ -510,7 +636,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function syncTimer() {
-		const needTimer = runningItems().length > 0 || hasActiveWorkflows() || reviewingActive;
+		const needTimer = runningItems().length > 0 || hasActiveWorkflows() || reviewingActive || thinkingPhaseActive;
 		if (needTimer && !animTimer) {
 			animTimer = setInterval(() => {
 				spinnerIndex = (spinnerIndex + 1) % SPINNER_FRAMES.length;
@@ -525,7 +651,7 @@ export default function (pi: ExtensionAPI) {
 						}
 					}
 					if (runningItems().length === 0 && !hasActiveWorkflows()) drawerOpen = false;
-					if (runningItems().length === 0 && !hasActiveWorkflows() && !reviewingActive) syncTimer();
+					if (runningItems().length === 0 && !hasActiveWorkflows() && !reviewingActive && !thinkingPhaseActive) syncTimer();
 				}
 				if (activeCtx?.mode === "tui") requestRender();
 			}, 35);
@@ -1061,6 +1187,7 @@ export default function (pi: ExtensionAPI) {
 		workflowRuns.clear();
 		drawerOpen = false;
 		reviewingActive = false;
+		thinkingPhaseActive = false;
 		syncTimer();
 		if (ctx.mode !== "tui") return;
 		const origSetWidget = ctx.ui.setWidget.bind(ctx.ui);
@@ -1093,6 +1220,7 @@ export default function (pi: ExtensionAPI) {
 					thinking: pi.getThinkingLevel() ?? "",
 					subagentLabel: currentSubagentLabel(),
 					reviewingLabel: reviewingActive ? "Reviewing" : "",
+					thinkingPhase: thinkingPhaseActive,
 					spinnerFrame: SPINNER_FRAMES[spinnerIndex] ?? SPINNER_FRAMES[0],
 					fg: (color, text) => activeCtx?.ui?.theme ? activeCtx.ui.theme.fg(color as any, text) : text,
 				}),
@@ -1100,31 +1228,44 @@ export default function (pi: ExtensionAPI) {
 				options,
 			);
 			const realTui = unwrapInteractiveTui(tui);
+			const nativeCb = ensureNativeClipboardLoaded();
 			if (realTui && typeof realTui === "object") {
-				let altSelectQuote = false;
+				let ctrlSelectQuote = false;
 				if (!realTui.__piThagorasMouseHooked && typeof realTui.handleSelectionMouseEvent === "function") {
 					const origHandleMouse = realTui.handleSelectionMouseEvent.bind(realTui);
 					realTui.handleSelectionMouseEvent = (event: any) => {
 						const btn = Number(event?.button ?? 0);
-						const isModifierQuote = (btn & 8) !== 0 || (btn & 16) !== 0;
+						const cb = nativeCb ?? ensureNativeClipboardLoaded();
+						const hwCtrl = cb?.isModifierPressed?.("ctrl") === true;
+						const isCtrlQuote = hwCtrl || (btn & 16) !== 0;
 						if (!event?.release && (btn & 32) === 0) {
-							altSelectQuote = isModifierQuote;
-						} else if (isModifierQuote) {
-							altSelectQuote = true;
+							ctrlSelectQuote = isCtrlQuote;
+						} else if (isCtrlQuote) {
+							ctrlSelectQuote = true;
 						}
 						return origHandleMouse(event);
 					};
 					realTui.__piThagorasMouseHooked = true;
 				}
 				realTui.copySelection = async (text: string) => {
-					const shouldQuote = altSelectQuote;
-					altSelectQuote = false;
+					const cb = nativeCb ?? ensureNativeClipboardLoaded();
+					const hwCtrlNow = cb?.isModifierPressed?.("ctrl") === true;
+					const shouldQuote = ctrlSelectQuote || hwCtrlNow;
+					ctrlSelectQuote = false;
 					lastSelectedText = text;
 					if (shouldQuote) {
 						appendQuoteToEditor(editor, text);
 						realTui.clearTextSelection?.();
 						realTui.requestRender?.();
 						return true;
+					}
+					if (cb?.setText) {
+						try {
+							await cb.setText(text);
+							return true;
+						} catch {
+							// fall through to clip.exe
+						}
 					}
 					if (process.platform === "win32") {
 						try {
@@ -1150,7 +1291,52 @@ export default function (pi: ExtensionAPI) {
 		workflowRuns.clear();
 		drawerOpen = false;
 		reviewingActive = false;
+		thinkingPhaseActive = false;
 		syncTimer();
+	});
+
+	pi.on("before_provider_request", (_event, ctx) => {
+		activeCtx = ctx;
+		const level = (pi.getThinkingLevel() ?? "").toLowerCase();
+		thinkingPhaseActive = Boolean(level && level !== "off");
+		syncTimer();
+		if (ctx.mode === "tui") requestRender();
+	});
+
+	pi.on("message_update", (event, ctx) => {
+		activeCtx = ctx;
+		const t = String((event as any)?.assistantMessageEvent?.type ?? "");
+		if (t === "thinking_start" || t === "thinking_delta") {
+			if (!thinkingPhaseActive) {
+				thinkingPhaseActive = true;
+				syncTimer();
+				if (ctx.mode === "tui") requestRender();
+			}
+		} else if (t === "text_start" || t === "text_delta" || t === "toolcall_start" || t === "toolcall_delta") {
+			if (thinkingPhaseActive) {
+				thinkingPhaseActive = false;
+				syncTimer();
+				if (ctx.mode === "tui") requestRender();
+			}
+		}
+	});
+
+	pi.on("message_end", (_event, ctx) => {
+		activeCtx = ctx;
+		if (thinkingPhaseActive) {
+			thinkingPhaseActive = false;
+			syncTimer();
+			if (ctx.mode === "tui") requestRender();
+		}
+	});
+
+	pi.on("tool_execution_start", (_event, ctx) => {
+		activeCtx = ctx;
+		if (thinkingPhaseActive) {
+			thinkingPhaseActive = false;
+			syncTimer();
+			if (ctx.mode === "tui") requestRender();
+		}
 	});
 
 	pi.on("model_select", (event, ctx) => {
@@ -1167,6 +1353,8 @@ export default function (pi: ExtensionAPI) {
 	for (const event of ["turn_end", "agent_end", "session_compact"] as const) {
 		pi.on(event, (_event, ctx) => {
 			activeCtx = ctx;
+			thinkingPhaseActive = false;
+			syncTimer();
 			if (ctx.mode === "tui") {
 				ctx.ui.setStatus("compact-warning", undefined);
 				requestRender();
